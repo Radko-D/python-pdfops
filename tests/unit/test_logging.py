@@ -1,0 +1,119 @@
+"""The JSON log line shape is an operator interface - pin it."""
+
+from __future__ import annotations
+
+import json
+import logging
+
+import pytest
+
+from pdf_ops.logging_setup import JsonFormatter, emit_terminal, setup_logging
+
+pytestmark = pytest.mark.unit
+
+
+def make_record(
+    msg: str = "some_event", extra: dict[str, object] | None = None
+) -> logging.LogRecord:
+    record = logging.LogRecord(
+        name="pdf_ops",
+        level=logging.INFO,
+        pathname=__file__,
+        lineno=1,
+        msg=msg,
+        args=None,
+        exc_info=None,
+    )
+    for key, value in (extra or {}).items():
+        setattr(record, key, value)
+    return record
+
+
+class TestJsonFormatter:
+    def test_emits_valid_json_with_required_fields(self) -> None:
+        payload = json.loads(JsonFormatter().format(make_record()))
+        assert payload["event"] == "some_event"
+        assert payload["level"] == "info"
+        # ISO-8601 UTC timestamp
+        assert payload["ts"].endswith("+00:00")
+
+    def test_extra_fields_are_merged_into_payload(self) -> None:
+        record = make_record(extra={"operation": "merge", "exit_code": 2, "context": {"a": 1}})
+        payload = json.loads(JsonFormatter().format(record))
+        assert payload["operation"] == "merge"
+        assert payload["exit_code"] == 2
+        assert payload["context"] == {"a": 1}
+
+    def test_exception_info_is_included(self) -> None:
+        try:
+            raise ValueError("boom")
+        except ValueError:
+            record = make_record()
+            record.exc_info = __import__("sys").exc_info()
+        payload = json.loads(JsonFormatter().format(record))
+        assert payload["exc_type"] == "ValueError"
+        assert "boom" in payload["traceback"]
+
+    def test_unserializable_values_fall_back_to_str(self) -> None:
+        record = make_record(extra={"path": object()})
+        payload = json.loads(JsonFormatter().format(record))
+        assert isinstance(payload["path"], str)
+
+
+class TestSetupLogging:
+    def test_returns_configured_logger_writing_json_lines(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        logger = setup_logging(logging.INFO)
+        logger.info("hello_event", extra={"k": "v"})
+        lines = capsys.readouterr().out.strip().splitlines()
+        assert len(lines) == 1
+        payload = json.loads(lines[0])
+        assert payload["event"] == "hello_event"
+        assert payload["k"] == "v"
+
+    def test_repeated_setup_does_not_duplicate_output(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        setup_logging()
+        logger = setup_logging()
+        logger.info("once_event")
+        assert capsys.readouterr().out.count("once_event") == 1
+
+    def test_level_filters_events(self, capsys: pytest.CaptureFixture[str]) -> None:
+        logger = setup_logging(logging.ERROR)
+        logger.info("quiet_event")
+        logger.error("loud_event")
+        out = capsys.readouterr().out
+        assert "quiet_event" not in out
+        assert "loud_event" in out
+
+
+class TestEmitTerminal:
+    def test_bypasses_level_filter(self, capsys: pytest.CaptureFixture[str]) -> None:
+        # The terminal event is the workflow engine's only completion signal;
+        # PDFOPS_LOG_LEVEL must never be able to suppress it.
+        logger = setup_logging(logging.ERROR)
+        emit_terminal(logger, logging.INFO, "operation_complete", {"exit_code": 0})
+        payload = json.loads(capsys.readouterr().out.strip())
+        assert payload["event"] == "operation_complete"
+        assert payload["level"] == "info"
+        assert payload["exit_code"] == 0
+
+    def test_includes_exception_info_when_requested(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        logger = setup_logging(logging.INFO)
+        try:
+            raise RuntimeError("kaboom")
+        except RuntimeError:
+            emit_terminal(
+                logger,
+                logging.ERROR,
+                "operation_failed",
+                {"exit_code": 1},
+                include_exc_info=True,
+            )
+        payload = json.loads(capsys.readouterr().out.strip())
+        assert payload["exc_type"] == "RuntimeError"
+        assert "kaboom" in payload["traceback"]

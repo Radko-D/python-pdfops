@@ -1,0 +1,71 @@
+[project]
+name = "pdf-ops"
+version = "0.1.0"
+description = "Containerized PDF operations (merge, extract attachments) for workflow systems"
+readme = "README.md"
+authors = [
+    { email = "29573973+Radko-D@users.noreply.github.com" }
+]
+requires-python = ">=3.14"
+dependencies = [
+    "pypdf>=6.16.2",
+]
+
+[project.scripts]
+pdf-ops = "pdf_ops.__main__:main"
+
+[tool.ruff]
+line-length = 100
+target-version = "py314"
+exclude = [".venv", "__pycache__", "build", "dist", "scripts"]
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "UP", "B", "C4", "ARG", "ASYNC", "RUF"]
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["ARG001", "ARG002"]  # Unused args common in pytest (fixtures, side effects)
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.ruff.lint.isort]
+known-first-party = ["pdf_ops"]
+
+[tool.pyright]
+pythonVersion = "3.14"
+venvPath = "."
+venv = ".venv"
+include = ["src", "tests"]
+exclude = [".venv", "__pycache__", "build", "dist"]
+typeCheckingMode = "strict"
+reportMissingTypeStubs = false
+reportUnknownMemberType = false
+reportUnknownArgumentType = false
+reportUnknownVariableType = false
+reportUnknownParameterType = false
+reportUnusedImport = false
+reportPrivateUsage = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v --strict-markers -m 'not container'"
+markers = [
+    "unit: Unit tests of pure functions and mappings",
+    "integration: In-process end-to-end tests through run(env)",
+    "container: Tests that build and run the Docker image",
+    "slow: Tests that take longer to run",
+]
+
+[build-system]
+requires = ["uv_build>=0.10.0,<0.11.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pre-commit>=4.6.2",
+    "pyright>=1.1.411",
+    "pytest>=9.1.1",
+    "ruff>=0.16.5",
+]
