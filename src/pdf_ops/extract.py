@@ -12,11 +12,11 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
-from pdf_ops.config import ExtractConfig, Secrets
+from pdf_ops.config import ExtractConfig, OnExists, Secrets
 from pdf_ops.engine import Attachment, get_engine
 from pdf_ops.errors import InputError, OutputError
 from pdf_ops.merge import validate_inputs
-from pdf_ops.output import atomic_output, check_output_dir
+from pdf_ops.output import atomic_output, check_output_dir, clean_stale_temps
 
 # Filesystem NAME_MAX is 255 bytes on the relevant filesystems; leave room
 # for collision suffixes and the atomic-write temp prefix.
@@ -59,34 +59,84 @@ def run_extract(config: ExtractConfig, secrets: Secrets, logger: logging.Logger)
         return {"attachments_extracted": 0, "bytes_written": 0}
 
     planned = _plan_targets(attachments)
+    planned_names = frozenset(p.name for p in planned)
 
-    # All-or-nothing conflict check BEFORE anything is written: a retry after
-    # a partial failure must not silently mix old and new files. lexists-style
-    # check so a pre-existing symlink (even dangling) counts as a conflict.
+    # A directory at any target name is never valid under any policy: it can
+    # be neither skipped as completed work nor atomically replaced.
+    directories = sorted(
+        p.name
+        for p in planned
+        if (target := config.output_dir / p.name).is_dir() and not target.is_symlink()
+    )
+    if directories:
+        raise OutputError(
+            f"target name(s) are directories in {config.output_dir}: {', '.join(directories)}",
+            error_code="OUTPUT_IS_DIRECTORY",
+            context={"output_dir": str(config.output_dir), "directories": directories},
+        )
+
+    # Conflicts are resolved by policy BEFORE anything is written. lexists-
+    # style detection so a pre-existing symlink (even dangling) counts.
     conflicts = sorted(
         str(p.name)
         for p in planned
         if (target := config.output_dir / p.name).is_symlink() or target.exists()
     )
+    skipped_names: set[str] = set()
+    replaced_names: list[str] = []
     if conflicts:
-        raise OutputError(
-            f"{len(conflicts)} file(s) already exist in {config.output_dir}: "
-            f"{', '.join(conflicts)} (refusing to overwrite)",
-            error_code="OUTPUT_EXISTS",
-            context={"output_dir": str(config.output_dir), "conflicts": conflicts},
-        )
+        match config.on_exists:
+            case OnExists.FAIL:
+                # All-or-nothing: one conflict refuses the whole run, so a
+                # retry can't silently mix old and new files.
+                raise OutputError(
+                    f"{len(conflicts)} file(s) already exist in {config.output_dir}: "
+                    f"{', '.join(conflicts)} (refusing to overwrite; "
+                    "set PDFOPS_ON_EXISTS to overwrite or skip for retry semantics)",
+                    error_code="OUTPUT_EXISTS",
+                    context={"output_dir": str(config.output_dir), "conflicts": conflicts},
+                )
+            case OnExists.SKIP:
+                # Per-file completion: existing REAL files are completed
+                # prior work (each was written atomically, so it is whole);
+                # only the missing ones are written - a crashed run's partial
+                # set gets finished by the retry. A dangling symlink is not
+                # completed work: it falls through to replacement.
+                skipped_names = {name for name in conflicts if (config.output_dir / name).exists()}
+                logger.info(
+                    "attachments_skipped",
+                    extra={"skipped": sorted(skipped_names), "count": len(skipped_names)},
+                )
+            case OnExists.OVERWRITE:
+                replaced_names = conflicts
+
+    # Stale-temp debris is cleaned up front, before the first write, so a
+    # finalized output of THIS run can never be mistaken for debris; the
+    # planned names themselves are additionally protected by construction.
+    for item in planned:
+        if item.name in skipped_names:
+            continue
+        for stale_name in clean_stale_temps(config.output_dir / item.name, planned_names):
+            logger.warning("stale_temp_removed", extra={"temp_file": stale_name})
 
     resolved_root = config.output_dir.resolve()
     bytes_written = 0
+    written = 0
     for item in planned:
+        if item.name in skipped_names:
+            continue
         target = config.output_dir / item.name
-        if not target.resolve().parent.is_relative_to(resolved_root):
-            # Unreachable if the sanitizer holds; a violation is a bug worth
-            # crashing loudly on, never worth writing through.
+        # Non-dereferencing containment check: the write must land in the
+        # output directory itself. (os.replace swaps a pre-existing symlink
+        # rather than writing through it, so the entry's own resolution is
+        # irrelevant - only a separator-carrying name could escape, and this
+        # guards against exactly that sanitizer regression.)
+        if target.parent.resolve() != resolved_root:
             raise RuntimeError(f"sanitization invariant violated for {item.original!r}")
         with atomic_output(target) as tmp_path:
             tmp_path.write_bytes(item.data)
         bytes_written += len(item.data)
+        written += 1
         logger.info(
             "attachment_extracted",
             extra={
@@ -96,7 +146,18 @@ def run_extract(config: ExtractConfig, secrets: Secrets, logger: logging.Logger)
             },
         )
 
-    return {"attachments_extracted": len(planned), "bytes_written": bytes_written}
+    if replaced_names:
+        # Emitted after the writes, mirroring merge: by now the replacement
+        # has actually happened.
+        logger.info(
+            "output_overwritten",
+            extra={"replaced": replaced_names, "count": len(replaced_names)},
+        )
+
+    result: dict[str, Any] = {"attachments_extracted": written, "bytes_written": bytes_written}
+    if skipped_names:
+        result["attachments_skipped"] = len(skipped_names)
+    return result
 
 
 @dataclass(frozen=True, slots=True)

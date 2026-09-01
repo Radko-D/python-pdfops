@@ -13,6 +13,7 @@ from pdf_ops.config import (
     ExtractConfig,
     FileSecret,
     MergeConfig,
+    OnExists,
     Operation,
     OutputEncryption,
     parse_config,
@@ -395,3 +396,25 @@ class TestEmptyInapplicableVars:
         # cannot be an inapplicability conflict either
         config = parse_config(EXTRACT_ENV | {var: ""})
         assert isinstance(config, ExtractConfig)
+
+
+class TestOnExists:
+    def test_defaults_to_fail(self) -> None:
+        assert parse_config(MERGE_ENV).on_exists is OnExists.FAIL
+        assert parse_config(EXTRACT_ENV).on_exists is OnExists.FAIL
+
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [("fail", OnExists.FAIL), ("Overwrite", OnExists.OVERWRITE), ("SKIP", OnExists.SKIP)],
+    )
+    def test_modes_case_insensitive(self, value: str, expected: OnExists) -> None:
+        assert parse_config(MERGE_ENV | {"PDFOPS_ON_EXISTS": value}).on_exists is expected
+
+    def test_applies_to_both_operations(self) -> None:
+        config = parse_config(EXTRACT_ENV | {"PDFOPS_ON_EXISTS": "skip"})
+        assert config.on_exists is OnExists.SKIP
+
+    def test_invalid_mode_rejected(self) -> None:
+        with pytest.raises(ConfigError) as exc_info:
+            parse_config(MERGE_ENV | {"PDFOPS_ON_EXISTS": "maybe"})
+        assert exc_info.value.error_code == "INVALID_ON_EXISTS"

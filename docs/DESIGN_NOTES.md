@@ -45,16 +45,20 @@ JSON event.
 |---|---|---|
 | 0 | success | includes zero-attachments extraction under the default policy |
 | 1 | unexpected internal error | `UNEXPECTED_ERROR` (bug or unhandled condition; traceback logged) |
-| 2 | invalid configuration | `MISSING_VAR`, `INVALID_OPERATION`, `INVALID_LOG_LEVEL`, `INVALID_FLAG`, `UNKNOWN_VAR`, `INAPPLICABLE_VAR`, `INVALID_INPUTS`, `DUPLICATE_INPUTS`, `CONFLICTING_PASSWORD_SOURCES`, `PASSWORD_FILE_UNREADABLE`, `EMPTY_PASSWORD`, `INVALID_OUTPUT_ENCRYPTION`, `OUTPUT_PASSWORD_WITHOUT_ENCRYPTION`, `MISSING_OUTPUT_PASSWORD` |
+| 2 | invalid configuration | `MISSING_VAR`, `INVALID_OPERATION`, `INVALID_LOG_LEVEL`, `INVALID_FLAG`, `UNKNOWN_VAR`, `INAPPLICABLE_VAR`, `INVALID_INPUTS`, `DUPLICATE_INPUTS`, `CONFLICTING_PASSWORD_SOURCES`, `PASSWORD_FILE_UNREADABLE`, `EMPTY_PASSWORD`, `INVALID_OUTPUT_ENCRYPTION`, `OUTPUT_PASSWORD_WITHOUT_ENCRYPTION`, `MISSING_OUTPUT_PASSWORD`, `INVALID_ON_EXISTS` |
 | 3 | input missing/unreadable | `INPUT_MISSING`, `INPUT_IS_DIRECTORY`, `INPUT_UNREADABLE`, `NO_ATTACHMENTS` (opt-in strict flag only) |
 | 4 | invalid/corrupt/unprocessable PDF | `NOT_A_PDF`, `CORRUPT_PDF`, `UNSUPPORTED_PDF_FEATURE` (e.g. a stream filter the build cannot decode) |
 | 5 | password | `PASSWORD_REQUIRED`, `WRONG_PASSWORD`, `UNSUPPORTED_ENCRYPTION` |
-| 6 | output | `OUTPUT_EXISTS`, `OUTPUT_DIR_MISSING`, `OUTPUT_NOT_WRITABLE`, `DISK_FULL` |
+| 6 | output | `OUTPUT_EXISTS`, `OUTPUT_DIR_MISSING`, `OUTPUT_IS_DIRECTORY`, `OUTPUT_NOT_WRITABLE`, `DISK_FULL` |
 
 Rationale for separating 3 from 4: a missing input may be a transient mount/ordering issue
 (plausibly retryable); a corrupt PDF is permanent (retrying is pure waste). The distinction is
-exactly what an Argo `retryStrategy.expression` needs. Open point (deferred, [D-006](DECISIONS.md#D-006)):
-a dedicated `10+` transient band versus keeping 1 as the only maybe-retryable code.
+exactly what an Argo `retryStrategy.expression` needs. The once-open question of a
+dedicated `10+` transient band was resolved with the retry-semantics work
+([D-020](DECISIONS.md#D-020), superseding [D-006](DECISIONS.md#D-006)): the map stays
+0-6 - it is a published API two iterations deep, nearly every failure class here is
+deterministic, and retryability is better expressed as documentation the operator
+composes (README's per-code table + retryStrategy expression) than as more codes.
 
 ## 3. Environment-variable contract (per [D-004](DECISIONS.md#D-004))
 
@@ -91,8 +95,9 @@ Event schema: `ts` (ISO-8601 UTC), `level`, `event` (stable machine token: `conf
 `pages`, `bytes_written`, `output_path`, `attachments_extracted`, `attachment`,
 `original_name`, `error_code`, `error_message`, `exit_code`, `context`, `exc_type`,
 `traceback`; password work adds `input_opened`, `password_unused`, `security_downgrade`,
-`output_encrypted` - see section 8). The human-readable text lives in `error_message`; `event`
-stays greppable.
+`output_encrypted` - see section 8; retry work adds `output_skipped`, `output_overwritten`,
+`attachments_skipped`, `stale_temp_removed`, and `duration_s` on terminal events - see
+section 9). The human-readable text lives in `error_message`; `event` stays greppable.
 
 A single error boundary in `main.run()` produces exactly one terminal event per run -
 `operation_complete` or `operation_failed` - so an operator can alert on
@@ -155,10 +160,10 @@ created *in the destination directory* - same filesystem, because `os.replace` i
 atomic within one - then fsynced and renamed over the final path in a single step (plus a
 directory fsync). The final path either holds a complete PDF or nothing: a failed, killed,
 or OOM-ed run never leaves a partial file where a downstream workflow step could glob it.
-This invariant is what any retry/overwrite policy can safely build on. An existing output
-is refused (`OUTPUT_EXISTS`) until the configurable overwrite/skip policy lands with the
-retry-semantics work; a missing output directory is refused rather than created - output
-locations are mounts, and a missing mount is a workflow bug worth failing loudly on.
+This invariant is what any retry/overwrite policy can safely build on. Existing outputs
+follow the `PDFOPS_ON_EXISTS` policy (section 9); a missing output directory is refused rather
+than created - output locations are mounts, and a missing mount is a workflow bug worth
+failing loudly on.
 
 ## 7. Extract and attachment-name security (per [D-014](DECISIONS.md#D-014), [D-015](DECISIONS.md#D-015), [D-016](DECISIONS.md#D-016))
 
@@ -264,3 +269,48 @@ the mode is `never` is a hard error, same philosophy as the unknown-var check. H
 caveat for the design doc: the fallback means input and output share a secret - right for
 re-locking same-owner documents; cross-tenant pipelines should set
 `PDFOPS_OUTPUT_PASSWORD_FILE` explicitly.
+
+## 9. Retry semantics and the existing-output policy (per [D-020](DECISIONS.md#D-020), [D-021](DECISIONS.md#D-021))
+
+Workflow engines are at-least-once: a pod can vanish after the work succeeded, and the
+retry must be predictable. Atomic writes are the foundation - the final path holds a
+complete file or nothing - and `PDFOPS_ON_EXISTS` builds the policy on top:
+
+- **`fail`** (default): refuse, exit 6. Retry-friendliness is opt-in; silent clobbering
+  never is.
+- **`overwrite`**: replace atomically, with an `output_overwritten` event. Serves
+  reprocessing pipelines.
+- **`skip`**: the idempotency mode. For merge, an existing output short-circuits the
+  whole run - exit 0, `skipped: true`, and the inputs are not even read, so a retry
+  after success still succeeds when upstream artifacts are already gone. For extract,
+  per-file completion: existing files are skipped (each was written atomically, so it is
+  whole), only missing ones are written - a crashed run's partial set gets *finished* by
+  the retry rather than refused. Reported as `attachments_extracted` +
+  `attachments_skipped`.
+
+Both `skip` modes trust an existing file as completed prior output - the deliberate
+[D-010](DECISIONS.md#D-010) tradeoff (a checksum-verified skip remains future work).
+
+**Stale-temp cleanup:** a run killed mid-write leaves `.name.<rand>.tmp` debris. At
+startup, temp files matching *this run's own target names* are removed
+(`stale_temp_removed`). The narrow scope is deliberate: it encodes the single-writer-
+per-output-path assumption (guaranteed by workflow engines per step) while making it
+impossible to touch another step's files.
+
+**Retryability ([D-020](DECISIONS.md#D-020)):** exit codes stay 0-6 - no transient band.
+The README documents per-code retryability (exit 1 the only default-retryable;
+`DISK_FULL` the judgment call) plus the Argo `retryStrategy.expression` snippet, paired
+with `PDFOPS_ON_EXISTS=skip` so a retry after a lost-but-successful pod is a free no-op.
+Terminal events now carry `duration_s` for operator dashboards.
+
+**Filesystem edge semantics, decided in review:** a *directory* at an output path is
+refused under every policy (`OUTPUT_IS_DIRECTORY`, exit 6) - it can be neither skipped
+as completed work nor atomically replaced. A *dangling symlink* is debris, not completed
+work: `skip` falls through and produces the output (the rename replaces the link itself,
+never writing through it), while a live symlink target counts as existing. The
+stale-temp matcher compares names **literally**, never as glob patterns - attachment
+names are attacker-supplied, and a name like `b[1].txt` must not widen the match onto
+another target's temps - and a run's own planned outputs are structurally excluded from
+cleanup, which happens entirely before the first write. Merge's `skip` short-circuit
+reads nothing at all: not the inputs, and not the mounted password file (secrets resolve
+lazily, after the skip decision).

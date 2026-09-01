@@ -127,6 +127,7 @@ class TestUnexpectedErrorBoundary:
         assert terminal["exit_code"] == 1
         assert terminal["exc_type"] == "RuntimeError"
         assert "traceback" in terminal
+        assert isinstance(terminal["duration_s"], float)
 
     def test_log_level_error_silences_lifecycle_events(
         self, crashing_dispatch: None, run_app: RunApp

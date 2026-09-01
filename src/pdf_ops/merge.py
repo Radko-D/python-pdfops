@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
 from pdf_ops.config import MergeConfig, OutputEncryption, Secrets
 from pdf_ops.engine import OpenedInput, get_engine
 from pdf_ops.errors import ConfigError, InputError, InvalidPdfError, PdfOpsError
-from pdf_ops.output import atomic_output, check_output_path
+from pdf_ops.output import atomic_output, check_output_path, clean_stale_temps
 from pdf_ops.secret import Secret
 
 PDF_MAGIC = b"%PDF-"
@@ -19,9 +19,22 @@ PDF_MAGIC = b"%PDF-"
 _INPUT_PROBLEMS = frozenset({"INPUT_MISSING", "INPUT_IS_DIRECTORY", "INPUT_UNREADABLE"})
 
 
-def run_merge(config: MergeConfig, secrets: Secrets, logger: logging.Logger) -> dict[str, Any]:
+def run_merge(
+    config: MergeConfig, get_secrets: Callable[[], Secrets], logger: logging.Logger
+) -> dict[str, Any]:
+    action = check_output_path(config.output, config.on_exists)
+    if action == "skip":
+        # The strongest idempotency semantics: an existing output means the
+        # work is done - neither the inputs nor a mounted password file are
+        # read (a retry after success must succeed even if upstream
+        # artifacts are already gone).
+        logger.info("output_skipped", extra={"output_path": str(config.output)})
+        return {"skipped": True, "output_path": str(config.output)}
+    for stale_name in clean_stale_temps(config.output):
+        logger.warning("stale_temp_removed", extra={"temp_file": stale_name})
+
     validate_inputs(config.inputs)
-    check_output_path(config.output)
+    secrets = get_secrets()
 
     engine = get_engine()
     opened: list[OpenedInput] = []
@@ -66,6 +79,8 @@ def run_merge(config: MergeConfig, secrets: Secrets, logger: logging.Logger) -> 
 
     with atomic_output(config.output) as tmp_path:
         engine.merge_to(opened, tmp_path, output_password)
+    if action == "overwrite":
+        logger.info("output_overwritten", extra={"output_path": str(config.output)})
 
     if output_password is not None:
         logger.info(

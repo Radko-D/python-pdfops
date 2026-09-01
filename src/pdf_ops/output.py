@@ -17,6 +17,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import NoReturn
 
+from pdf_ops.config import OnExists
 from pdf_ops.errors import OutputError
 
 
@@ -31,8 +32,13 @@ def check_output_dir(directory: Path) -> None:
         )
 
 
-def check_output_path(path: Path) -> None:
-    """Fail fast on unusable output locations, before any work is done."""
+def check_output_path(path: Path, on_exists: OnExists) -> str:
+    """Fail fast on unusable output locations, before any work is done.
+
+    Returns the resolved action: ``"proceed"`` (no conflict), ``"skip"``
+    (existing output accepted as a completed prior run), or ``"overwrite"``
+    (existing output will be atomically replaced).
+    """
     parent = path.parent
     if not parent.is_dir():
         raise OutputError(
@@ -41,12 +47,59 @@ def check_output_path(path: Path) -> None:
             error_code="OUTPUT_DIR_MISSING",
             context={"output": str(path)},
         )
-    if path.exists():
+    if path.is_dir() and not path.is_symlink():
+        # Never valid under any policy: it cannot be skipped as completed
+        # work and os.replace cannot atomically replace a directory.
         raise OutputError(
-            f"output {path} already exists (refusing to overwrite)",
-            error_code="OUTPUT_EXISTS",
+            f"output path {path} is a directory",
+            error_code="OUTPUT_IS_DIRECTORY",
             context={"output": str(path)},
         )
+    if not (path.is_symlink() or path.exists()):
+        return "proceed"
+    if on_exists is OnExists.SKIP:
+        # Completed prior work must be a real, resolvable file. A dangling
+        # symlink is debris: fall through to replacement so the retry
+        # actually produces the output (os.replace swaps the link itself,
+        # atomically, without writing through it).
+        return "skip" if path.is_file() else "overwrite"
+    if on_exists is OnExists.OVERWRITE:
+        return "overwrite"
+    raise OutputError(
+        f"output {path} already exists (refusing to overwrite; "
+        "set PDFOPS_ON_EXISTS to overwrite or skip for retry semantics)",
+        error_code="OUTPUT_EXISTS",
+        context={"output": str(path)},
+    )
+
+
+def clean_stale_temps(
+    target: Path, protected: frozenset[str] | set[str] = frozenset()
+) -> list[str]:
+    """Remove temp debris a crashed prior run left for this exact target.
+
+    Scoped to this run's own target name via LITERAL string matching -
+    never glob patterns, which would misinterpret metacharacters in
+    (possibly attacker-supplied) names in both directions: deleting another
+    target's temps and missing this target's own. Names in ``protected``
+    (this run's planned final outputs) are never touched. One writer per
+    output path at a time is the documented assumption; other steps' files
+    are never removed. Returns the removed names for logging.
+    """
+    prefix = f".{target.name}."
+    removed: list[str] = []
+    for entry in sorted(target.parent.iterdir()):
+        name = entry.name
+        if not (name.startswith(prefix) and name.endswith(".tmp")):
+            continue
+        if name in protected:
+            continue
+        try:
+            entry.unlink()
+        except OSError:  # a concurrent unlink is fine; anything else surfaces later
+            continue
+        removed.append(name)
+    return removed
 
 
 @contextmanager

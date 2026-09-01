@@ -196,3 +196,34 @@ def test_golden_encrypted_merge_with_mounted_password_file(image: str, mount_dir
 
     encrypt_dict = cast("Any", reader.trailer["/Encrypt"]).get_object()
     assert int(encrypt_dict["/V"]) == 5  # AES-256, not legacy RC4
+
+
+def test_skip_makes_a_retry_a_no_op(image: str, mount_dir: Path) -> None:
+    in_dir = mount_dir / "in"
+    out_dir = mount_dir / "out"
+    in_dir.mkdir()
+    out_dir.mkdir()
+    out_dir.chmod(0o777)
+
+    writer = PdfWriter()
+    writer.add_blank_page(width=200, height=300)
+    with (in_dir / "a.pdf").open("wb") as handle:
+        writer.write(handle)
+
+    env = {
+        "PDFOPS_OPERATION": "merge",
+        "PDFOPS_INPUTS": "/in/a.pdf",
+        "PDFOPS_OUTPUT": "/out/merged.pdf",
+        "PDFOPS_ON_EXISTS": "skip",
+    }
+    volumes = {in_dir: "/in:ro", out_dir: "/out"}
+
+    first = docker_run(image, env, volumes=volumes)
+    assert first.returncode == 0, first.stdout + first.stderr
+    original = (out_dir / "merged.pdf").read_bytes()
+
+    second = docker_run(image, env, volumes=volumes)
+    assert second.returncode == 0, second.stdout + second.stderr
+    events = [json.loads(line) for line in second.stdout.strip().splitlines()]
+    assert events[-1]["skipped"] is True
+    assert (out_dir / "merged.pdf").read_bytes() == original

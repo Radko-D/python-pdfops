@@ -4,8 +4,8 @@ Containerized PDF operations for workflow systems (e.g. Argo Workflows): exactly
 operation per container run - **merge** multiple PDFs into one, or **extract** the
 attachments embedded in a PDF - configured entirely through environment variables.
 
-> **Status: work in progress.** Both operations and password support are implemented;
-> next up are an overwrite policy for retries and container hardening. See
+> **Status: work in progress.** Both operations, password support, and retry semantics
+> are implemented; container hardening is next. See
 > [`docs/DECISIONS.md`](docs/DECISIONS.md) for the decision register and
 > [`docs/DESIGN_NOTES.md`](docs/DESIGN_NOTES.md) for design notes.
 
@@ -65,6 +65,7 @@ from `PDFOPS_*` variables, and the mounted volumes provide inputs and receive ou
 | `PDFOPS_OUTPUT_ENCRYPTION` | merge | no | `never`, `inherit`, `always` (case-insensitive) - see below | `never` |
 | `PDFOPS_OUTPUT_PASSWORD_FILE` | merge | no | secret file holding the password for the merged output | - |
 | `PDFOPS_OUTPUT_PASSWORD` | merge | no | output password as a direct value (same caveats as `PDFOPS_PASSWORD`) | - |
+| `PDFOPS_ON_EXISTS` | both | no | `fail`, `overwrite`, `skip` (case-insensitive) - see Retries | `fail` |
 | `PDFOPS_LOG_LEVEL` | - | no | `debug`, `info`, `warning`, `error` (case-insensitive) | `info` |
 
 Strictness rules, all exit 2: any other `PDFOPS_*` variable is rejected as a probable
@@ -104,8 +105,17 @@ repeated path is almost always a templating bug that would silently duplicate co
 - Output is written **atomically**: work goes to a temp file in the output directory,
   then a single rename. The final path either holds a complete PDF or nothing - a
   failed or killed run never leaves a partial file where a downstream step could read it.
-- An existing file at `PDFOPS_OUTPUT` is refused (exit 6, `OUTPUT_EXISTS`); a
-  configurable overwrite/skip policy is planned alongside retry semantics.
+- **Existing outputs** follow `PDFOPS_ON_EXISTS`: `fail` (default) refuses with exit 6;
+  `overwrite` replaces atomically (readers see old bytes or new bytes, never a mix);
+  `skip` treats the existing output as a completed prior run. For merge, `skip` is a
+  whole-run no-op - exit 0 with `skipped: true`, without even reading the inputs. For
+  extract, `skip` is **per-file completion**: only missing attachments are written
+  (`attachments_skipped` reports the rest), so a crashed run's partial set gets finished
+  by the retry - sound because every file this tool writes is atomic and therefore whole.
+  Both `skip` modes trust that an existing file is a completed prior output.
+- Temp debris from a crashed prior run (`.name.*.tmp` matching this run's own targets)
+  is removed at startup with a `stale_temp_removed` event. One writer per output path at
+  a time is assumed - which a workflow engine guarantees per step.
 - All inputs are validated (existence, readability, PDF header) **before anything is
   written**, and every bad input is reported in a single failure event.
 - **Attachment names are treated as untrusted input**: extraction reduces every name to a
@@ -114,8 +124,10 @@ repeated path is almost always a templating bug that would silently duplicate co
   outside `PDFOPS_OUTPUT_DIR`. Duplicate names get deterministic `-1`/`-2` suffixes;
   the original name is logged whenever sanitization changed it.
 - Extraction order is the PDF's name-tree order - deterministic across runs. Each file is
-  written atomically, and any pre-existing file (or symlink) at a target name fails the
-  whole run **before** anything is written (exit 6). A PDF with zero attachments is a
+  written atomically; under the default `fail` policy any pre-existing file (or symlink)
+  at a target name refuses the whole run **before** anything is written (exit 6) - see
+  `PDFOPS_ON_EXISTS` above for the retry-friendly modes. A directory at an output path is
+  refused under every policy (`OUTPUT_IS_DIRECTORY`). A PDF with zero attachments is a
   success with `attachments_extracted=0` unless the strict flag is set.
 
 ## Exit codes
@@ -134,6 +146,32 @@ Every run ends with exactly one terminal JSON event on stdout - `operation_compl
 (merge: `pages`, `bytes_written`, `output_path`; extract: `attachments_extracted`,
 `bytes_written`) or `operation_failed` (with `error_code`, `error_message`,
 `exit_code`). Terminal events are never suppressed by `PDFOPS_LOG_LEVEL`.
+
+## Retries
+
+Workflow engines retry at-least-once, and most failures here are deterministic -
+retrying a wrong password or a corrupt PDF is pure waste. The retryability of each exit
+code:
+
+| Code | Retry? | Why |
+|---|---|---|
+| 1 | yes | unexpected internal error - the only class where a retry might see different behavior |
+| 2 | no | configuration is immutable for a given pod spec |
+| 3 | usually no | missing/unreadable input - permanent unless an upstream mount races |
+| 4 | no | the PDF itself is bad; it will be bad again |
+| 5 | no | the password will still be wrong |
+| 6 | usually no | output conflict/location - `DISK_FULL` is the judgment call (space may free up) |
+
+Argo example - retry only on unexpected errors, with `skip` making any retry after a
+lost-but-successful pod a free no-op:
+
+```yaml
+retryStrategy:
+  limit: "3"
+  expression: "asInt(lastRetry.exitCode) == 1"
+# and in the container env:
+#   PDFOPS_ON_EXISTS: skip
+```
 
 ## Development
 

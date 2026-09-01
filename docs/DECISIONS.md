@@ -17,7 +17,7 @@ This document is the authoritative register of all architectural decisions for t
 | [`D-003`](#D-003) | 🟢 | error-handling | Exit-code taxonomy: classes 0-6 + error_code strings | 2026-08-31 | 0 success, 1 unexpected, 2 config, 3 input missing, 4 invalid/corrupt PDF, 5 password, 6 output; defined fully up front because workflow retry policies build on it. Fine granularity via machine-readable error_code strings in the terminal JSON event, not more codes. | [`DESIGN_NOTES.md section 2`](DESIGN_NOTES.md) | - |
 | [`D-004`](#D-004) | 🟢 | config | Env contract: PDFOPS_ prefix, fail-fast pure parsing, unknown-var rejection | 2026-08-31 | All config from PDFOPS_* env vars parsed by a pure function over Mapping[str,str] before any file is touched; os.environ only in __main__. Unknown PDFOPS_* vars are rejected as probable typos (exit 2 UNKNOWN_VAR); empty equals missing. | [`DESIGN_NOTES.md section 3`](DESIGN_NOTES.md) | - |
 | [`D-005`](#D-005) | 🟢 | observability | Observability: JSON-lines on stdout via stdlib logging | 2026-08-31 | One JSON object per line on stdout (workflow engine captures step logs); stable event tokens with structured fields; exactly one terminal event per run from the single error boundary. Stdlib logging with a small formatter - no structlog/OTel dependency. | [`DESIGN_NOTES.md section 4`](DESIGN_NOTES.md) | - |
-| [`D-006`](#D-006) | ⏸ | error-handling | Transient exit-code band (10+) for retryable failures | 2026-08-31 | Deferred (2026-08-31): the 0-6 map stands as-is with exit 1 the only maybe-retryable code. A dedicated 10+ transient band (e.g. transient I/O) would let Argo retryStrategy expressions retry precisely; revisit when retry semantics become load-bearing. | [`DESIGN_NOTES.md section 2`](DESIGN_NOTES.md) | - |
+| [`D-006`](#D-006) | 🔵 | error-handling | Transient exit-code band (10+) for retryable failures | 2026-08-31 | Deferred (2026-08-31): the 0-6 map stands as-is with exit 1 the only maybe-retryable code. A dedicated 10+ transient band (e.g. transient I/O) would let Argo retryStrategy expressions retry precisely; revisit when retry semantics become load-bearing. | [`DESIGN_NOTES.md section 2`](DESIGN_NOTES.md) | - |
 | [`D-007`](#D-007) | ⏸ | config | PDFOPS_INPUTS list separator | 2026-08-31 | Deferred (2026-08-31): the merge implementation ships the recommended default - os.pathsep (colon) with explicit ordered paths, no globs - as provisional. Alternatives (comma, newline, JSON array) parked; revisit if colon-in-path or workflow-templating friction appears. | [`DESIGN_NOTES.md section 3`](DESIGN_NOTES.md) | - |
 | [`D-008`](#D-008) | ⏸ | config | Operation value case strictness | 2026-08-31 | Deferred (2026-08-31): strict lowercase merge/extract (whitespace tolerated) stands as implemented. Case-insensitive acceptance parked; revisit at README/contract freeze or on operator feedback. | [`DESIGN_NOTES.md section 3`](DESIGN_NOTES.md) | - |
 | [`D-009`](#D-009) | ⏸ | config | Unknown PDFOPS_* variable hard rejection | 2026-08-31 | Deferred (2026-08-31): hard rejection (exit 2 UNKNOWN_VAR) stands as implemented. Softening to a warning parked; revisit if a platform legitimately injects foreign PDFOPS_* vars (e.g. when the deployment example is written). | [`DESIGN_NOTES.md section 3`](DESIGN_NOTES.md) | - |
@@ -31,8 +31,10 @@ This document is the authoritative register of all architectural decisions for t
 | [`D-017`](#D-017) | 🟢 | security | Password channels with a layered, tested no-leak guarantee | 2026-09-01 | One password via mutually exclusive channels - PDFOPS_PASSWORD_FILE (mounted secret, preferred) or PDFOPS_PASSWORD (discouraged, documented why); parser stays filesystem-free by capturing the source and resolving in one step before dispatch. No-leak is layered: Secret wrapper renders ***, the log layer scrubs registered values incl. tracebacks, the entrypoint deletes secret vars from the live env, and leak tests assert the literal password appears in no output on success, failure, or crash paths. | [`DESIGN_NOTES.md section 8`](DESIGN_NOTES.md) | - |
 | [`D-018`](#D-018) | 🟢 | pdf-engine | Decrypt semantics: empty-password auto-try, algorithm + password_type logged | 2026-09-01 | The plaintext /Encrypt dictionary yields the algorithm before any password work (logged per input); with no password supplied the spec-standard empty-password verification runs first - a side-effect-free hash check, the same thing every viewer does - so owner-only permissions-locked PDFs just work, and PASSWORD_REQUIRED fires only when the empty try fails. Successful opens log password_type user/owner/empty; a wrong password names the failing input; an unneeded password draws a password_unused warning. | [`DESIGN_NOTES.md section 8`](DESIGN_NOTES.md) | - |
 | [`D-019`](#D-019) | 🟢 | security | Output encryption: never|inherit|always tri-state, AES-256, explicit-password fallback | 2026-09-01 | PDFOPS_OUTPUT_ENCRYPTION: never (default; plaintext output with a loud security_downgrade warning when inputs were encrypted), inherit (encrypt iff any input was encrypted - confidentiality never decreases), always. Output password from its own channel pair, falling back only to an explicitly supplied input password - never the empty auto-try (MISSING_OUTPUT_PASSWORD instead). Output always AES-256 regardless of input schemes; an output password with mode never is a hard error. | [`DESIGN_NOTES.md section 8`](DESIGN_NOTES.md) | - |
+| [`D-020`](#D-020) | 🟢 | error-handling | Retryability contract: exit codes stay 0-6, retry guidance is documentation | 2026-09-01 | No 10+ transient exit-code band: the 0-6 map is a published API and nearly every failure class is deterministic, so retryability lives in the README - a per-code table (exit 1 the only default-retryable, DISK_FULL the judgment call) and an Argo retryStrategy.expression snippet, paired with PDFOPS_ON_EXISTS=skip for at-least-once safety. | [`DESIGN_NOTES.md section 9`](DESIGN_NOTES.md) | - |
+| [`D-021`](#D-021) | 🟢 | reliability | PDFOPS_ON_EXISTS tri-state: merge whole-run skip, extract per-file completion | 2026-09-01 | fail (default) refuses; overwrite replaces atomically; skip treats existing output as completed prior work - merge short-circuits without reading inputs, extract writes only missing attachments (sound because every written file is atomic and therefore whole). Stale temp debris matching the run's own targets is removed at startup under a documented single-writer-per-output assumption. | [`DESIGN_NOTES.md section 9`](DESIGN_NOTES.md) | - |
 
-**Counts:** 19 total decisions - 14 🟢 decided, 0 🟡 pending, 4 ⏸ deferred, 1 🔵 superseded.
+**Counts:** 21 total decisions - 16 🟢 decided, 0 🟡 pending, 3 ⏸ deferred, 2 🔵 superseded.
 
 ### Index by area
 
@@ -40,20 +42,19 @@ This document is the authoritative register of all architectural decisions for t
 
 | Area | Count | IDs |
 |---|---|---|
+| error-handling | 5 | D-003, D-006, D-012, D-015, D-020 |
 | config | 4 | D-004, D-007, D-008, D-009 |
-| error-handling | 4 | D-003, D-006, D-012, D-015 |
 | pdf-engine | 4 | D-002, D-011, D-016, D-018 |
 | security | 4 | D-013, D-014, D-017, D-019 |
+| reliability | 2 | D-010, D-021 |
 | observability | 1 | D-005 |
 | project | 1 | D-001 |
-| reliability | 1 | D-010 |
-| **Total** | **19** | |
+| **Total** | **21** | |
 
 ### Open decisions (🟡 Pending + ⏸ Deferred)
 
 | ID | Status | Owner / Trigger |
 |---|---|---|
-| [`D-006`](#D-006) | ⏸ Deferred | Retry-semantics work documents the Argo retryStrategy expression |
 | [`D-007`](#D-007) | ⏸ Deferred | Post-merge review, or `:`-in-path / templating friction |
 | [`D-008`](#D-008) | ⏸ Deferred | Contract freeze, or mixed-case values seen in practice |
 | [`D-009`](#D-009) | ⏸ Deferred | Platform injecting foreign `PDFOPS_*` vars (deployment-example watch) |
@@ -131,7 +132,8 @@ Per-decision details: status, decided date, rationale, related decisions, and th
 <a id="D-006"></a>
 ### D-006
 - **Title:** Transient exit-code band (10+) for retryable failures
-- **Status:** ⏸ Deferred
+- **Status:** 🔵 Superseded
+- **Superseded by:** [D-020](#D-020)
 - **Area:** error-handling
 - **Decided on:** 2026-08-31
 - **Summary:** Deferred (2026-08-31): the 0-6 map stands as-is with exit 1 the only maybe-retryable code. A dedicated 10+ transient band (e.g. transient I/O) would let Argo retryStrategy expressions retry precisely; revisit when retry semantics become load-bearing.
@@ -241,6 +243,7 @@ Per-decision details: status, decided date, rationale, related decisions, and th
 - **Summary:** Extraction follows PDF name-tree order (deterministic across runs); duplicate names get -1/-2 suffixes; pre-existing files or symlinks at any target name fail the run before anything is written; zero attachments is exit 0 with attachments_extracted=0, flipped to exit 3 NO_ATTACHMENTS by PDFOPS_FAIL_ON_NO_ATTACHMENTS=true.
 - **Risk:** medium
 - **Reversibility:** cheap
+- **Amended by:** [D-021](#D-021) (conflict handling became policy-dependent; order, dedupe, and zero-attachment clauses stand)
 - **Where:** [`DESIGN_NOTES.md section 7`](DESIGN_NOTES.md)
 
 <a id="D-016"></a>
@@ -287,6 +290,30 @@ Per-decision details: status, decided date, rationale, related decisions, and th
 - **Risk:** medium
 - **Reversibility:** cheap
 - **Where:** [`DESIGN_NOTES.md section 8`](DESIGN_NOTES.md)
+
+<a id="D-020"></a>
+### D-020
+- **Title:** Retryability contract: exit codes stay 0-6, retry guidance is documentation
+- **Status:** 🟢 Decided
+- **Area:** error-handling
+- **Decided on:** 2026-09-01
+- **Summary:** No 10+ transient exit-code band: the 0-6 map is a published API and nearly every failure class is deterministic, so retryability lives in the README - a per-code table (exit 1 the only default-retryable, DISK_FULL the judgment call) and an Argo retryStrategy.expression snippet, paired with PDFOPS_ON_EXISTS=skip for at-least-once safety.
+- **Risk:** medium
+- **Reversibility:** expensive
+- **Supersedes:** [D-006](#D-006)
+- **Where:** [`DESIGN_NOTES.md section 9`](DESIGN_NOTES.md)
+
+<a id="D-021"></a>
+### D-021
+- **Title:** PDFOPS_ON_EXISTS tri-state: merge whole-run skip, extract per-file completion
+- **Status:** 🟢 Decided
+- **Area:** reliability
+- **Decided on:** 2026-09-01
+- **Summary:** fail (default) refuses; overwrite replaces atomically; skip treats existing output as completed prior work - merge short-circuits without reading inputs, extract writes only missing attachments (sound because every written file is atomic and therefore whole). Stale temp debris matching the run's own targets is removed at startup under a documented single-writer-per-output assumption.
+- **Risk:** medium
+- **Reversibility:** cheap
+- **Amends:** [D-015](#D-015)
+- **Where:** [`DESIGN_NOTES.md section 9`](DESIGN_NOTES.md)
 
 ---
 

@@ -31,6 +31,7 @@ VAR_OUTPUT_DIR = "PDFOPS_OUTPUT_DIR"
 VAR_FAIL_ON_NO_ATTACHMENTS = "PDFOPS_FAIL_ON_NO_ATTACHMENTS"
 VAR_PASSWORD = "PDFOPS_PASSWORD"
 VAR_PASSWORD_FILE = "PDFOPS_PASSWORD_FILE"
+VAR_ON_EXISTS = "PDFOPS_ON_EXISTS"
 VAR_OUTPUT_ENCRYPTION = "PDFOPS_OUTPUT_ENCRYPTION"
 VAR_OUTPUT_PASSWORD = "PDFOPS_OUTPUT_PASSWORD"
 VAR_OUTPUT_PASSWORD_FILE = "PDFOPS_OUTPUT_PASSWORD_FILE"
@@ -49,6 +50,7 @@ KNOWN_VARS = frozenset(
         VAR_FAIL_ON_NO_ATTACHMENTS,
         VAR_PASSWORD,
         VAR_PASSWORD_FILE,
+        VAR_ON_EXISTS,
         VAR_OUTPUT_ENCRYPTION,
         VAR_OUTPUT_PASSWORD,
         VAR_OUTPUT_PASSWORD_FILE,
@@ -77,6 +79,20 @@ DEFAULT_LOG_LEVEL = logging.INFO
 class Operation(StrEnum):
     MERGE = "merge"
     EXTRACT = "extract"
+
+
+class OnExists(StrEnum):
+    """Policy for outputs that already exist - the retry-semantics knob.
+
+    ``fail``: refuse (exit 6), the surprise-free default. ``overwrite``:
+    replace atomically. ``skip``: treat existing output as a completed prior
+    run - for merge a whole-run no-op (exit 0, ``skipped: true``); for
+    extract, per-file completion (write only the missing attachments).
+    """
+
+    FAIL = "fail"
+    OVERWRITE = "overwrite"
+    SKIP = "skip"
 
 
 class OutputEncryption(StrEnum):
@@ -120,6 +136,7 @@ class MergeConfig:
     password: SecretRef | None
     output_encryption: OutputEncryption
     output_password: SecretRef | None
+    on_exists: OnExists
 
 
 @dataclass(frozen=True, slots=True)
@@ -130,6 +147,7 @@ class ExtractConfig:
     output_dir: Path
     fail_on_no_attachments: bool
     password: SecretRef | None
+    on_exists: OnExists
 
 
 type Config = MergeConfig | ExtractConfig
@@ -145,6 +163,7 @@ def parse_config(env: Mapping[str, str]) -> Config:
     operation = _parse_operation(env)
     log_level = _parse_log_level(env)
     password = _parse_secret_pair(env, VAR_PASSWORD, VAR_PASSWORD_FILE)
+    on_exists = _parse_on_exists(env)
     match operation:
         case Operation.MERGE:
             _reject_inapplicable_vars(env, operation, EXTRACT_ONLY_VARS)
@@ -155,6 +174,7 @@ def parse_config(env: Mapping[str, str]) -> Config:
                 password=password,
                 output_encryption=_parse_output_encryption(env),
                 output_password=_parse_output_password(env, password),
+                on_exists=on_exists,
             )
         case Operation.EXTRACT:
             _reject_inapplicable_vars(env, operation, MERGE_ONLY_VARS)
@@ -166,6 +186,7 @@ def parse_config(env: Mapping[str, str]) -> Config:
                 ),
                 fail_on_no_attachments=_parse_flag(env, VAR_FAIL_ON_NO_ATTACHMENTS),
                 password=password,
+                on_exists=on_exists,
             )
 
 
@@ -321,6 +342,21 @@ def _parse_secret_pair(env: Mapping[str, str], value_var: str, file_var: str) ->
     if raw_file:
         return FileSecret(path=Path(raw_file))
     return None
+
+
+def _parse_on_exists(env: Mapping[str, str]) -> OnExists:
+    raw = env.get(VAR_ON_EXISTS, "").strip()
+    if not raw:
+        return OnExists.FAIL
+    try:
+        return OnExists(raw.lower())
+    except ValueError:
+        raise ConfigError(
+            f"{VAR_ON_EXISTS} has invalid value {raw!r} "
+            "(accepted values: fail, overwrite, skip, case-insensitive)",
+            error_code="INVALID_ON_EXISTS",
+            context={"var": VAR_ON_EXISTS, "value": raw},
+        ) from None
 
 
 def _parse_output_encryption(env: Mapping[str, str]) -> OutputEncryption:

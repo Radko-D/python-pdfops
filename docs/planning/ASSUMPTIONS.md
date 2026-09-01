@@ -21,7 +21,7 @@ These are details that will be resolved during development, not blockers.
 
 | # | Item | Deferred To | Notes |
 |---|------|-------------|-------|
-| 1 | Transient exit-code band (10+) | Retry-semantics work | [`D-006`](../DECISIONS.md#D-006) - 0-6 map stands; exit 1 only maybe-retryable until then |
+| 1 | Transient exit-code band (10+) | ~~Retry-semantics work~~ **Resolved 2026-09-01** | [`D-020`](../DECISIONS.md#D-020) - no band; 0-6 map kept, retryability documented |
 | 2 | `PDFOPS_INPUTS` separator | Post-merge review | [`D-007`](../DECISIONS.md#D-007) - merge ships provisional `os.pathsep` (colon) |
 | 3 | Operation value case strictness | Contract freeze | [`D-008`](../DECISIONS.md#D-008) - strict lowercase stands |
 | 4 | Unknown `PDFOPS_*` var hard rejection | Deployment example | [`D-009`](../DECISIONS.md#D-009) - hard exit 2 stands |
