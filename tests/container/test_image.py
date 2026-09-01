@@ -153,3 +153,46 @@ def test_golden_merge_via_mounted_volumes(image: str, mount_dir: Path) -> None:
     merged = out_dir / "merged.pdf"
     assert merged.exists()
     assert len(PdfReader(merged).pages) == 3
+
+
+def test_golden_encrypted_merge_with_mounted_password_file(image: str, mount_dir: Path) -> None:
+    in_dir = mount_dir / "in"
+    out_dir = mount_dir / "out"
+    secret_dir = mount_dir / "secret"
+    for directory in (in_dir, out_dir, secret_dir):
+        directory.mkdir()
+    out_dir.chmod(0o777)
+
+    password = "container-test-pw"
+    writer = PdfWriter()
+    writer.add_blank_page(width=200, height=300)
+    writer.encrypt(user_password=password, algorithm="AES-256")
+    with (in_dir / "locked.pdf").open("wb") as handle:
+        writer.write(handle)
+    (secret_dir / "pw").write_text(password + "\n")
+
+    result = docker_run(
+        image,
+        {
+            "PDFOPS_OPERATION": "merge",
+            "PDFOPS_INPUTS": "/in/locked.pdf",
+            "PDFOPS_OUTPUT": "/out/merged.pdf",
+            "PDFOPS_PASSWORD_FILE": "/secret/pw",
+            "PDFOPS_OUTPUT_ENCRYPTION": "inherit",
+        },
+        volumes={in_dir: "/in:ro", secret_dir: "/secret:ro", out_dir: "/out"},
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert password not in result.stdout
+    assert password not in result.stderr
+    events = [json.loads(line) for line in result.stdout.strip().splitlines()]
+    assert events[-1]["output_encrypted"] is True
+
+    reader = PdfReader(out_dir / "merged.pdf")
+    assert reader.is_encrypted
+    assert reader.decrypt(password) != 0
+    from typing import Any, cast
+
+    encrypt_dict = cast("Any", reader.trailer["/Encrypt"]).get_object()
+    assert int(encrypt_dict["/V"]) == 5  # AES-256, not legacy RC4

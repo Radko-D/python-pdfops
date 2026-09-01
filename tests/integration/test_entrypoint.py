@@ -52,3 +52,27 @@ def test_extract_without_required_vars_exits_2() -> None:
     assert result.stderr == ""
     events = [json.loads(line) for line in result.stdout.strip().splitlines()]
     assert events[-1]["error_code"] == "MISSING_VAR"
+
+
+def test_password_env_var_never_reaches_output() -> None:
+    result = run_module({"PDFOPS_OPERATION": "bogus", "PDFOPS_PASSWORD": "hunter2-secret"})
+    assert result.returncode == 2
+    assert "hunter2-secret" not in result.stdout
+    assert "hunter2-secret" not in result.stderr
+
+
+def test_password_scrubbed_from_process_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    # __main__.main snapshots the env, then scrubs secret vars from the live
+    # process environment before any work (child processes, crash tooling).
+    import os
+
+    from pdf_ops.__main__ import main
+
+    monkeypatch.setenv("PDFOPS_OPERATION", "bogus")
+    monkeypatch.setenv("PDFOPS_PASSWORD", "hunter2-secret")
+    monkeypatch.setenv("PDFOPS_OUTPUT_PASSWORD", "other-secret")
+    with pytest.raises(SystemExit) as exc_info:
+        main()
+    assert exc_info.value.code == 2
+    assert "PDFOPS_PASSWORD" not in os.environ
+    assert "PDFOPS_OUTPUT_PASSWORD" not in os.environ

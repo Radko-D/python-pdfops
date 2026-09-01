@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import ClassVar, Literal
 
 from pdf_ops.errors import ConfigError
+from pdf_ops.secret import Secret
 
 ENV_PREFIX = "PDFOPS_"
 
@@ -28,6 +29,11 @@ VAR_OUTPUT = "PDFOPS_OUTPUT"
 VAR_INPUT = "PDFOPS_INPUT"
 VAR_OUTPUT_DIR = "PDFOPS_OUTPUT_DIR"
 VAR_FAIL_ON_NO_ATTACHMENTS = "PDFOPS_FAIL_ON_NO_ATTACHMENTS"
+VAR_PASSWORD = "PDFOPS_PASSWORD"
+VAR_PASSWORD_FILE = "PDFOPS_PASSWORD_FILE"
+VAR_OUTPUT_ENCRYPTION = "PDFOPS_OUTPUT_ENCRYPTION"
+VAR_OUTPUT_PASSWORD = "PDFOPS_OUTPUT_PASSWORD"
+VAR_OUTPUT_PASSWORD_FILE = "PDFOPS_OUTPUT_PASSWORD_FILE"
 
 # Every variable the application understands. Any other PDFOPS_-prefixed
 # variable is rejected as a probable typo (a silently ignored misspelling like
@@ -41,10 +47,17 @@ KNOWN_VARS = frozenset(
         VAR_INPUT,
         VAR_OUTPUT_DIR,
         VAR_FAIL_ON_NO_ATTACHMENTS,
+        VAR_PASSWORD,
+        VAR_PASSWORD_FILE,
+        VAR_OUTPUT_ENCRYPTION,
+        VAR_OUTPUT_PASSWORD,
+        VAR_OUTPUT_PASSWORD_FILE,
     }
 )
 
-MERGE_ONLY_VARS = frozenset({VAR_INPUTS, VAR_OUTPUT})
+MERGE_ONLY_VARS = frozenset(
+    {VAR_INPUTS, VAR_OUTPUT, VAR_OUTPUT_ENCRYPTION, VAR_OUTPUT_PASSWORD, VAR_OUTPUT_PASSWORD_FILE}
+)
 EXTRACT_ONLY_VARS = frozenset({VAR_INPUT, VAR_OUTPUT_DIR, VAR_FAIL_ON_NO_ATTACHMENTS})
 
 # The list separator for PDFOPS_INPUTS: os.pathsep (":" on POSIX), the same
@@ -66,12 +79,47 @@ class Operation(StrEnum):
     EXTRACT = "extract"
 
 
+class OutputEncryption(StrEnum):
+    """Policy for encrypting the merged output.
+
+    ``never``: plaintext output (a loud warning event flags the downgrade when
+    inputs were encrypted). ``inherit``: encrypt iff at least one input was
+    encrypted - confidentiality never decreases through this step. ``always``:
+    unconditionally encrypt.
+    """
+
+    NEVER = "never"
+    INHERIT = "inherit"
+    ALWAYS = "always"
+
+
+@dataclass(frozen=True, slots=True)
+class EnvSecret:
+    """A secret supplied directly in an environment variable."""
+
+    value: Secret
+
+
+@dataclass(frozen=True, slots=True)
+class FileSecret:
+    """A secret to be read from a mounted file (resolved after parsing -
+    the parser itself stays filesystem-free)."""
+
+    path: Path
+
+
+type SecretRef = EnvSecret | FileSecret
+
+
 @dataclass(frozen=True, slots=True)
 class MergeConfig:
     operation: ClassVar[Literal[Operation.MERGE]] = Operation.MERGE
     log_level: int
     inputs: tuple[Path, ...]
     output: Path
+    password: SecretRef | None
+    output_encryption: OutputEncryption
+    output_password: SecretRef | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,6 +129,7 @@ class ExtractConfig:
     input: Path
     output_dir: Path
     fail_on_no_attachments: bool
+    password: SecretRef | None
 
 
 type Config = MergeConfig | ExtractConfig
@@ -95,6 +144,7 @@ def parse_config(env: Mapping[str, str]) -> Config:
     _reject_unknown_vars(env)
     operation = _parse_operation(env)
     log_level = _parse_log_level(env)
+    password = _parse_secret_pair(env, VAR_PASSWORD, VAR_PASSWORD_FILE)
     match operation:
         case Operation.MERGE:
             _reject_inapplicable_vars(env, operation, EXTRACT_ONLY_VARS)
@@ -102,6 +152,9 @@ def parse_config(env: Mapping[str, str]) -> Config:
                 log_level=log_level,
                 inputs=_parse_inputs(env),
                 output=_parse_output(env),
+                password=password,
+                output_encryption=_parse_output_encryption(env),
+                output_password=_parse_output_password(env, password),
             )
         case Operation.EXTRACT:
             _reject_inapplicable_vars(env, operation, MERGE_ONLY_VARS)
@@ -112,6 +165,7 @@ def parse_config(env: Mapping[str, str]) -> Config:
                     env, VAR_OUTPUT_DIR, "the directory receiving the attachments"
                 ),
                 fail_on_no_attachments=_parse_flag(env, VAR_FAIL_ON_NO_ATTACHMENTS),
+                password=password,
             )
 
 
@@ -131,7 +185,10 @@ def _reject_inapplicable_vars(
 ) -> None:
     # A merge-only variable on an extract run (or vice versa) is the same
     # class of workflow-templating bug as a typo: fail loudly, don't ignore.
-    present = sorted(k for k in inapplicable if k in env)
+    # Value-based, honoring the empty-equals-missing rule: an empty variable
+    # configures nothing. (The unknown-var check stays name-based - there the
+    # typo'd NAME is the signal, whatever the value.)
+    present = sorted(k for k in inapplicable if env.get(k, "").strip())
     if present:
         raise ConfigError(
             f"variable(s) not applicable to operation '{operation.value}': {', '.join(present)}",
@@ -242,3 +299,142 @@ def _parse_flag(env: Mapping[str, str], var: str, *, default: bool = False) -> b
         error_code="INVALID_FLAG",
         context={"var": var, "value": raw},
     )
+
+
+def _parse_secret_pair(env: Mapping[str, str], value_var: str, file_var: str) -> SecretRef | None:
+    """One secret, two mutually exclusive channels: direct value or file path.
+
+    The direct value is taken verbatim (passwords may legitimately begin or
+    end with whitespace); an empty value counts as unset, consistent with the
+    empty-equals-missing rule.
+    """
+    raw_value = env.get(value_var, "")
+    raw_file = env.get(file_var, "").strip()
+    if raw_value and raw_file:
+        raise ConfigError(
+            f"{value_var} and {file_var} are mutually exclusive - supply one",
+            error_code="CONFLICTING_PASSWORD_SOURCES",
+            context={"vars": [value_var, file_var]},
+        )
+    if raw_value:
+        return EnvSecret(value=Secret(raw_value))
+    if raw_file:
+        return FileSecret(path=Path(raw_file))
+    return None
+
+
+def _parse_output_encryption(env: Mapping[str, str]) -> OutputEncryption:
+    raw = env.get(VAR_OUTPUT_ENCRYPTION, "").strip()
+    if not raw:
+        return OutputEncryption.NEVER
+    try:
+        return OutputEncryption(raw.lower())
+    except ValueError:
+        raise ConfigError(
+            f"{VAR_OUTPUT_ENCRYPTION} has invalid value {raw!r} "
+            "(accepted values: never, inherit, always, case-insensitive)",
+            error_code="INVALID_OUTPUT_ENCRYPTION",
+            context={"var": VAR_OUTPUT_ENCRYPTION, "value": raw},
+        ) from None
+
+
+def _parse_output_password(env: Mapping[str, str], password: SecretRef | None) -> SecretRef | None:
+    output_password = _parse_secret_pair(env, VAR_OUTPUT_PASSWORD, VAR_OUTPUT_PASSWORD_FILE)
+    mode = _parse_output_encryption(env)
+    if mode is OutputEncryption.NEVER and output_password is not None:
+        # An output password that can never be used is config drift of the
+        # same kind as a typo'd variable: fail loudly, don't ignore.
+        raise ConfigError(
+            f"an output password is supplied but {VAR_OUTPUT_ENCRYPTION} is 'never' "
+            "(set it to 'inherit' or 'always', or remove the output password)",
+            error_code="OUTPUT_PASSWORD_WITHOUT_ENCRYPTION",
+            context={"var": VAR_OUTPUT_ENCRYPTION},
+        )
+    if mode is OutputEncryption.ALWAYS and output_password is None and password is None:
+        raise ConfigError(
+            f"{VAR_OUTPUT_ENCRYPTION}=always requires an output password "
+            f"({VAR_OUTPUT_PASSWORD_FILE}/{VAR_OUTPUT_PASSWORD}) or an input password to fall back to",
+            error_code="MISSING_OUTPUT_PASSWORD",
+            context={"var": VAR_OUTPUT_ENCRYPTION},
+        )
+    return output_password
+
+
+def resolve_secret(ref: SecretRef | None) -> Secret | None:
+    """Materialize a secret reference; the one place secret file I/O happens.
+
+    A single trailing newline is stripped (hand-created secret files usually
+    have one; the password itself is otherwise taken byte-for-byte).
+    """
+    match ref:
+        case None:
+            return None
+        case EnvSecret(value=value):
+            _reject_control_characters(value.reveal(), "the environment")
+            return value
+        case FileSecret(path=path):
+            try:
+                raw = path.read_text(encoding="utf-8")
+            except OSError as err:
+                raise ConfigError(
+                    f"cannot read password file {path}: {err.strerror or err}",
+                    error_code="PASSWORD_FILE_UNREADABLE",
+                    context={"path": str(path)},
+                ) from err
+            except UnicodeDecodeError as err:
+                # Deliberately no decode detail: it would name a byte of the
+                # secret and its position.
+                raise ConfigError(
+                    f"password file {path} is not valid UTF-8 text",
+                    error_code="PASSWORD_FILE_UNREADABLE",
+                    context={"path": str(path)},
+                ) from err
+            raw = raw.removesuffix("\n").removesuffix("\r")
+            if not raw:
+                raise ConfigError(
+                    f"password file {path} is empty",
+                    error_code="EMPTY_PASSWORD",
+                    context={"path": str(path)},
+                )
+            _reject_control_characters(raw, str(path))
+            return Secret(raw)
+
+
+def _reject_control_characters(value: str, origin: str) -> None:
+    """A password containing control characters is almost certainly an
+    encoding or copy-paste accident - and downstream cryptographic
+    normalization (SASLprep) would warn about it, naming the codepoint."""
+    if any(ord(ch) < 32 or 0x7F <= ord(ch) <= 0x9F for ch in value):
+        raise ConfigError(
+            f"the password from {origin} contains control characters "
+            "(check for encoding or copy-paste issues)",
+            error_code="PASSWORD_UNSUPPORTED_CHARACTERS",
+            context={"source": origin},
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class Secrets:
+    """Materialized secrets for one run, resolved from the config's refs."""
+
+    password: Secret | None
+    output_password: Secret | None
+
+
+def resolve_secrets(config: Config) -> Secrets:
+    """Read any file-based secrets; raises ConfigError on unreadable/empty files."""
+    output_password = (
+        resolve_secret(config.output_password) if isinstance(config, MergeConfig) else None
+    )
+    return Secrets(password=resolve_secret(config.password), output_password=output_password)
+
+
+def describe_secret(ref: SecretRef | None) -> str:
+    """Presence-only description for the config-echo log event."""
+    match ref:
+        case None:
+            return "unset"
+        case EnvSecret():
+            return "set(env)"
+        case FileSecret():
+            return "set(file)"

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import sys
 from datetime import UTC, datetime
 from typing import Any
@@ -20,6 +21,61 @@ _LOGGER_NAME = "pdf_ops"
 _RESERVED = frozenset(vars(logging.makeLogRecord({}))) | {"message", "asctime", "taskName"}
 
 
+# Secret values registered for defense-in-depth scrubbing. The primary rule
+# is that secrets are never passed to a log call at all (the Secret wrapper
+# makes that structural); this layer catches the residue that rule can't -
+# e.g. a library exception whose args embed the password, serialized into a
+# traceback payload.
+_REDACTED_VALUES: set[str] = set()
+
+# Scrubbing applies ONLY to free-text fields where library residue can land.
+# Code-controlled token fields (event, operation, error_code, ...) must stay
+# byte-stable: workflow engines branch on them, and rewriting known constants
+# would itself disclose the password (seeing "***_written" where
+# "merge_written" belongs tells a log reader the password is "merge").
+_SCRUBBED_FIELDS = frozenset({"traceback", "detail", "error_message", "context"})
+
+# Below this, scrubbing a secret would shred free text without adding real
+# protection; the structural layers still hold, and run() logs a warning.
+MIN_SCRUBBED_SECRET_LENGTH = 4
+
+
+def register_secret_value(value: str) -> bool:
+    """Scrub ``value`` from every future log record's free-text fields.
+
+    Also registers the repr-escaped spelling (a library embedding the value
+    via ``%r`` writes ``back\\\\slash`` for ``back\\slash``). Returns whether
+    the value was long enough to register.
+    """
+    if len(value) < MIN_SCRUBBED_SECRET_LENGTH:
+        return False
+    _REDACTED_VALUES.add(value)
+    escaped = repr(value)[1:-1]
+    if escaped != value:
+        _REDACTED_VALUES.add(escaped)
+    return True
+
+
+def clear_registered_secrets() -> None:
+    _REDACTED_VALUES.clear()
+
+
+def _scrub(value: Any) -> Any:
+    if isinstance(value, str):
+        # Longest first: with overlapping secrets registered (e.g. rotated
+        # passwords sharing a prefix), replacing the shorter one first would
+        # leave the tail of the longer one exposed.
+        for secret in sorted(_REDACTED_VALUES, key=len, reverse=True):
+            if secret in value:
+                value = value.replace(secret, "***")
+        return value
+    if isinstance(value, dict):
+        return {key: _scrub(item) for key, item in value.items()}  # pyright: ignore[reportUnknownVariableType]
+    if isinstance(value, (list, tuple)):
+        return [_scrub(item) for item in value]  # pyright: ignore[reportUnknownVariableType]
+    return value
+
+
 class JsonFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         payload: dict[str, Any] = {
@@ -29,10 +85,10 @@ class JsonFormatter(logging.Formatter):
         }
         for key, value in record.__dict__.items():
             if key not in _RESERVED and not key.startswith("_"):
-                payload[key] = value
+                payload[key] = _scrub(value) if key in _SCRUBBED_FIELDS else value
         if record.exc_info and record.exc_info[0] is not None:
             payload["exc_type"] = record.exc_info[0].__name__
-            payload["traceback"] = self.formatException(record.exc_info)
+            payload["traceback"] = _scrub(self.formatException(record.exc_info))
         return json.dumps(payload, default=str)
 
 
@@ -66,7 +122,12 @@ class _ThirdPartyEventFilter(logging.Filter):
     """
 
     def filter(self, record: logging.LogRecord) -> bool:
-        record.detail = record.getMessage()
+        detail = record.getMessage()
+        if "SASLprep" in detail:
+            # pypdf's SASLprep warning names the exact codepoint of a
+            # password character - password material; mask it.
+            detail = re.sub(r"U\+[0-9A-Fa-f]{4,6}", "U+****", detail)
+        record.detail = detail
         record.source = record.name
         record.msg = "pdf_library_message"
         record.args = ()
@@ -88,6 +149,8 @@ def setup_logging(level: int = logging.INFO) -> logging.Logger:
     Also routes third-party library records and captured warnings into the
     same JSON stream.
     """
+    clear_registered_secrets()  # a fresh run registers its own secrets
+
     handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(JsonFormatter())
 

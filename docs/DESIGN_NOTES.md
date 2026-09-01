@@ -45,10 +45,10 @@ JSON event.
 |---|---|---|
 | 0 | success | includes zero-attachments extraction under the default policy |
 | 1 | unexpected internal error | `UNEXPECTED_ERROR` (bug or unhandled condition; traceback logged) |
-| 2 | invalid configuration | `MISSING_VAR`, `INVALID_OPERATION`, `INVALID_LOG_LEVEL`, `INVALID_FLAG`, `UNKNOWN_VAR`, `INAPPLICABLE_VAR`, `INVALID_INPUTS`, `DUPLICATE_INPUTS` |
+| 2 | invalid configuration | `MISSING_VAR`, `INVALID_OPERATION`, `INVALID_LOG_LEVEL`, `INVALID_FLAG`, `UNKNOWN_VAR`, `INAPPLICABLE_VAR`, `INVALID_INPUTS`, `DUPLICATE_INPUTS`, `CONFLICTING_PASSWORD_SOURCES`, `PASSWORD_FILE_UNREADABLE`, `EMPTY_PASSWORD`, `INVALID_OUTPUT_ENCRYPTION`, `OUTPUT_PASSWORD_WITHOUT_ENCRYPTION`, `MISSING_OUTPUT_PASSWORD` |
 | 3 | input missing/unreadable | `INPUT_MISSING`, `INPUT_IS_DIRECTORY`, `INPUT_UNREADABLE`, `NO_ATTACHMENTS` (opt-in strict flag only) |
 | 4 | invalid/corrupt/unprocessable PDF | `NOT_A_PDF`, `CORRUPT_PDF`, `UNSUPPORTED_PDF_FEATURE` (e.g. a stream filter the build cannot decode) |
-| 5 | password | `PASSWORD_REQUIRED`, `WRONG_PASSWORD`, `UNSUPPORTED_ENCRYPTION` (with password support) |
+| 5 | password | `PASSWORD_REQUIRED`, `WRONG_PASSWORD`, `UNSUPPORTED_ENCRYPTION` |
 | 6 | output | `OUTPUT_EXISTS`, `OUTPUT_DIR_MISSING`, `OUTPUT_NOT_WRITABLE`, `DISK_FULL` |
 
 Rationale for separating 3 from 4: a missing input may be a transient mount/ordering issue
@@ -90,7 +90,9 @@ Event schema: `ts` (ISO-8601 UTC), `level`, `event` (stable machine token: `conf
 `operation_failed`, `pdf_library_message`), plus event-specific fields (`operation`,
 `pages`, `bytes_written`, `output_path`, `attachments_extracted`, `attachment`,
 `original_name`, `error_code`, `error_message`, `exit_code`, `context`, `exc_type`,
-`traceback`). The human-readable text lives in `error_message`; `event` stays greppable.
+`traceback`; password work adds `input_opened`, `password_unused`, `security_downgrade`,
+`output_encrypted` - see section 8). The human-readable text lives in `error_message`; `event`
+stays greppable.
 
 A single error boundary in `main.run()` produces exactly one terminal event per run -
 `operation_complete` or `operation_failed` - so an operator can alert on
@@ -107,8 +109,8 @@ through to `logging.lastResort` and print plain text on **stderr** - breaking th
 JSON-only/empty-stderr contract on inputs that merge *successfully*. `setup_logging`
 therefore routes the `pypdf` logger (and Python warnings, via `logging.captureWarnings`)
 into the same stdout JSON stream as `event=pdf_library_message` with the original text in
-`detail` and the emitting logger in `source`. The secret-redaction filter lands in this
-layer together with password support.
+`detail` and the emitting logger in `source`. The same layer scrubs registered secret
+values from every record - see section 8.
 
 ## 5. Engine seam (per [D-002](DECISIONS.md#D-002), [D-011](DECISIONS.md#D-011))
 
@@ -126,11 +128,12 @@ Two translation subtleties found in review, both worth knowing about pypdf:
   flattening - not a `PyPdfError`. The engine therefore catches a small set of builtin
   exception types *around pypdf calls only* and classifies them as `CORRUPT_PDF`
   (exit 4); without that, deterministic bad inputs would exit 1 and look retryable.
-- **Encrypted inputs are refused, not mangled ([D-013](DECISIONS.md#D-013)).** Until
-  password support lands, an encrypted input maps to exit 5 (`PASSWORD_REQUIRED`, or
-  `UNSUPPORTED_ENCRYPTION` when pypdf needs the missing AES backend) rather than
-  masquerading as a corrupt file - the operator's fix (supply a password / wait for the
-  feature) is entirely different from the fix for a broken file.
+- **Encryption failures keep the password exit class** (originally
+  [D-013](DECISIONS.md#D-013), now superseded by full password support -
+  [D-017](DECISIONS.md#D-017), section 8): an undecryptable input maps to exit 5
+  (`PASSWORD_REQUIRED`/`WRONG_PASSWORD`/`UNSUPPORTED_ENCRYPTION`) rather than
+  masquerading as a corrupt file - the operator's fix for a locked file is entirely
+  different from the fix for a broken one.
 
 **Merge is pages-only for now ([D-011](DECISIONS.md#D-011)):** bookmarks/outlines, form
 fields, document metadata, and embedded attachments of the *inputs* are not carried into
@@ -195,3 +198,69 @@ future fix if a downstream consumer needs all-or-nothing.
 Page-level `/FileAttachment` annotations are a distinct, rarer mechanism (sticky-note
 attachments); pypdf's `attachment_list` does not surface them. Documented as a limitation
 rather than half-supported.
+
+## 8. Passwords and output encryption (per [D-017](DECISIONS.md#D-017), [D-018](DECISIONS.md#D-018), [D-019](DECISIONS.md#D-019))
+
+**Channels ([D-017](DECISIONS.md#D-017)):** one password, two mutually exclusive sources -
+`PDFOPS_PASSWORD_FILE` (a mounted secret, the preferred channel: it never appears in pod
+specs, `kubectl describe`, or `/proc/<pid>/environ`) and `PDFOPS_PASSWORD` (kept for local
+runs, documented as discouraged). The parser stays filesystem-free: it captures the
+*source*; the file is read in one resolution step before dispatch, so unreadable/empty
+secret files still classify as configuration errors.
+
+**The no-leak guarantee is layered, and tested rather than promised:**
+
+1. *By construction*: the `Secret` wrapper renders as `***` through `repr`/`str`/f-strings;
+   the raw value is reachable only via an explicit accessor called in exactly one module
+   (the engine).
+2. *Defense in depth*: the logging layer scrubs registered secret values (and their
+   repr-escaped spellings) from the **free-text fields** of every record - `traceback`,
+   `detail`, `error_message`, `context` - longest secret first so overlapping values
+   can't leave partial reveals. Code-controlled token fields (`event`, `error_code`,
+   `operation`, ...) are deliberately exempt: workflow engines branch on them, and
+   rewriting known constants would itself disclose the password (a log reader seeing
+   `***_written` where `merge_written` belongs learns the password is "merge").
+   Secrets shorter than 4 characters are not scrubbed (they'd shred the free text
+   without adding protection) - flagged with a `redaction_degraded` warning.
+3. *Process hygiene*: the entrypoint snapshots the environment and deletes the secret
+   variables from the live process env before any work - child processes and later
+   readers see nothing, though the initial environment block remains visible to
+   `/proc/<pid>/environ` and `docker inspect`, which is precisely why the file channel
+   is the preferred one. Password *files* must be valid UTF-8 (a binary file is refused
+   without echoing any of its bytes), and passwords containing control characters are
+   rejected outright - they're encoding accidents, and downstream cryptographic
+   normalization would otherwise warn about them naming the exact codepoint.
+4. *Proof*: leak tests run success, wrong-password, and crash-with-secret-in-exception
+   scenarios and assert the literal password appears nowhere in any captured output.
+
+**Decrypt semantics ([D-018](DECISIONS.md#D-018)):** the `/Encrypt` dictionary is
+plaintext, so each `input_opened` event reports the algorithm (RC4-40/128, AES-128,
+AES-256) before any password work. When no password is supplied, the spec-standard
+empty-password verification runs first - a pure hash computation with no side effects,
+and exactly what every PDF viewer does on open - so the extremely common owner-only
+"permissions-locked" files just work; `PASSWORD_REQUIRED` fires only when the empty try
+fails. The same courtesy applies when a password *was* supplied but doesn't fit a given
+input: the empty try still runs before `WRONG_PASSWORD`, so a merge mixing user-locked
+and permissions-locked files needs only the one real password. An encryption scheme the
+build can't process at all (certificate security handlers, exotic revisions) classifies
+as `UNSUPPORTED_ENCRYPTION` - exit 5, not a corrupt-file 4: the remedy is different. pypdf's `decrypt()` reports failure through its *return value*, not an exception -
+the explicit check is load-bearing, and its result also yields the logged
+`password_type` (`user`/`owner`/`empty`). A password that fits one merge input but not
+another fails naming the input, never echoing the password. A supplied password with no
+encrypted input draws a `password_unused` warning.
+
+**Output encryption ([D-019](DECISIONS.md#D-019)):** `PDFOPS_OUTPUT_ENCRYPTION` is a
+tri-state. `never` (default) keeps plaintext output but emits a `security_downgrade`
+warning when encrypted inputs flowed in - visible, never silent. `inherit` encrypts the
+output iff any input was encrypted, encoding "confidentiality never decreases through
+this step" without per-workflow thought. `always` encrypts unconditionally and fails at
+config parse if no password exists anywhere. The output password comes from its own
+channel pair, falling back to the *explicitly supplied* input password - never the empty
+auto-try, which carries no real secret (an empty-password lock is a lock made of paper);
+that gap is a fail-fast `MISSING_OUTPUT_PASSWORD`. Output encryption is always **AES-256**
+regardless of input schemes (pypdf's write default is legacy RC4 - passed explicitly), so
+an RC4-locked input under `inherit` comes out upgraded. An output password supplied while
+the mode is `never` is a hard error, same philosophy as the unknown-var check. Honest
+caveat for the design doc: the fallback means input and output share a secret - right for
+re-locking same-owner documents; cross-tenant pipelines should set
+`PDFOPS_OUTPUT_PASSWORD_FILE` explicitly.

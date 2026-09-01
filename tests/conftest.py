@@ -122,12 +122,27 @@ def _build_raw_pdf(objects: list[str | bytes]) -> bytes:
 
 @pytest.fixture
 def make_encrypted_pdf(tmp_path: Path) -> Callable[..., Path]:
-    """A valid PDF encrypted with an RC4 user password."""
+    """An encrypted one-page PDF.
 
-    def _make(name: str = "locked.pdf", password: str = "secret") -> Path:
+    Default: RC4 with a user password. ``algorithm="AES-256"`` for the modern
+    scheme; ``user_password=""`` with an ``owner_password`` builds the common
+    permissions-locked file that every viewer opens without a prompt.
+    """
+
+    def _make(
+        name: str = "locked.pdf",
+        password: str = "secret",
+        owner_password: str | None = None,
+        algorithm: str | None = None,
+    ) -> Path:
         writer = PdfWriter()
         writer.add_blank_page(width=200, height=300)
-        writer.encrypt(user_password=password)
+        if algorithm is not None:
+            writer.encrypt(
+                user_password=password, owner_password=owner_password, algorithm=algorithm
+            )
+        else:
+            writer.encrypt(user_password=password, owner_password=owner_password)
         path = tmp_path / name
         with path.open("wb") as handle:
             writer.write(handle)

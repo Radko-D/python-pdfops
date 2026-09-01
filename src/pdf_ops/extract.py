@@ -12,7 +12,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
-from pdf_ops.config import ExtractConfig
+from pdf_ops.config import ExtractConfig, Secrets
 from pdf_ops.engine import Attachment, get_engine
 from pdf_ops.errors import InputError, OutputError
 from pdf_ops.merge import validate_inputs
@@ -25,11 +25,29 @@ _MAX_NAME_BYTES = 200
 FALLBACK_PREFIX = "attachment_"
 
 
-def run_extract(config: ExtractConfig, logger: logging.Logger) -> dict[str, Any]:
+def run_extract(config: ExtractConfig, secrets: Secrets, logger: logging.Logger) -> dict[str, Any]:
     validate_inputs([config.input])
     check_output_dir(config.output_dir)
 
-    attachments = get_engine().list_attachments(config.input)
+    engine = get_engine()
+    opened = engine.open_input(config.input, secrets.password)
+    logger.info(
+        "input_opened",
+        extra={
+            "input": str(config.input),
+            "pages": opened.pages,
+            "encrypted": opened.encrypted,
+            "algorithm": opened.algorithm,
+            "password_type": opened.password_type,
+        },
+    )
+    if secrets.password is not None and not opened.encrypted:
+        logger.warning(
+            "password_unused",
+            extra={"detail": "a password was supplied but the input is not encrypted"},
+        )
+
+    attachments = engine.list_attachments(opened)
     if not attachments:
         if config.fail_on_no_attachments:
             raise InputError(

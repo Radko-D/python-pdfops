@@ -6,10 +6,18 @@ import logging
 from collections.abc import Mapping
 from typing import Any
 
-from pdf_ops.config import Config, ExtractConfig, MergeConfig, parse_config
+from pdf_ops.config import (
+    Config,
+    ExtractConfig,
+    MergeConfig,
+    Secrets,
+    describe_secret,
+    parse_config,
+    resolve_secrets,
+)
 from pdf_ops.errors import ExitCode, PdfOpsError
 from pdf_ops.extract import run_extract
-from pdf_ops.logging_setup import emit_terminal, setup_logging
+from pdf_ops.logging_setup import emit_terminal, register_secret_value, setup_logging
 from pdf_ops.merge import run_merge
 
 
@@ -26,14 +34,18 @@ def run(env: Mapping[str, str]) -> int:
     try:
         config = parse_config(env)
         logger.setLevel(config.log_level)
-        logger.info(
-            "config_loaded",
-            extra={
-                "operation": config.operation.value,
-                "log_level": logging.getLevelName(config.log_level).lower(),
-            },
-        )
-        result = _dispatch(config, logger)
+        secrets = resolve_secrets(config)
+        for secret in (secrets.password, secrets.output_password):
+            if secret is not None and not register_secret_value(secret.reveal()):
+                logger.warning(
+                    "redaction_degraded",
+                    extra={
+                        "detail": "a supplied secret is too short for defense-in-depth "
+                        "log scrubbing; the structural no-leak layers still apply"
+                    },
+                )
+        logger.info("config_loaded", extra=_config_echo(config))
+        result = _dispatch(config, secrets, logger)
         emit_terminal(
             logger,
             logging.INFO,
@@ -72,10 +84,23 @@ def run(env: Mapping[str, str]) -> int:
         return int(ExitCode.UNEXPECTED)
 
 
-def _dispatch(config: Config, logger: logging.Logger) -> dict[str, Any] | None:
+def _config_echo(config: Config) -> dict[str, Any]:
+    """The config_loaded payload: secrets appear as presence only, never value."""
+    echo: dict[str, Any] = {
+        "operation": config.operation.value,
+        "log_level": logging.getLevelName(config.log_level).lower(),
+        "password": describe_secret(config.password),
+    }
+    if isinstance(config, MergeConfig):
+        echo["output_encryption"] = config.output_encryption.value
+        echo["output_password"] = describe_secret(config.output_password)
+    return echo
+
+
+def _dispatch(config: Config, secrets: Secrets, logger: logging.Logger) -> dict[str, Any] | None:
     logger.info("operation_started", extra={"operation": config.operation.value})
     match config:
         case MergeConfig():
-            return run_merge(config, logger)
+            return run_merge(config, secrets, logger)
         case ExtractConfig():
-            return run_extract(config, logger)
+            return run_extract(config, secrets, logger)

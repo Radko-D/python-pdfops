@@ -24,12 +24,15 @@ This document is the authoritative register of all architectural decisions for t
 | [`D-010`](#D-010) | 🟢 | reliability | Atomic output writes: temp file in destination dir + os.replace | 2026-08-31 | All output goes to a temp file in the destination directory (same filesystem), is fsynced, and is renamed over the final path in one step; the final path holds a complete PDF or nothing. Existing output refused (OUTPUT_EXISTS) until the overwrite/skip policy lands; missing output dir refused, never auto-created. | [`DESIGN_NOTES.md section 6`](DESIGN_NOTES.md) | - |
 | [`D-011`](#D-011) | 🟢 | pdf-engine | Merge is pages-only; input attachments/bookmarks/metadata not carried | 2026-08-31 | The merged output carries pages only: bookmarks, form fields, metadata, and embedded attachments of the inputs are not copied (no mainstream Python library copies /Names/EmbeddedFiles on merge - attachments would drop silently). Documented limitation; detect-and-warn vs fail-loud vs qpdf --copy-attachments-from evaluated when attachment handling is built out. | [`DESIGN_NOTES.md section 5`](DESIGN_NOTES.md) | - |
 | [`D-012`](#D-012) | 🟢 | error-handling | Merge input validation: collect-all, first problem sets exit class | 2026-08-31 | Every input is checked up front (exists, is a file, readable, %PDF- magic) before any write; all problems are reported in one failure event with the full list in context.problems, and the exit class follows the first problem in input order. Duplicate inputs are a hard config error; a single input is a valid merge. | [`DESIGN_NOTES.md section 6`](DESIGN_NOTES.md) | - |
-| [`D-013`](#D-013) | 🟢 | security | Encrypted inputs refused with the password exit class | 2026-08-31 | Until password support lands, encrypted input PDFs are refused with exit 5 (PASSWORD_REQUIRED; UNSUPPORTED_ENCRYPTION when the AES backend is unavailable) instead of surfacing as corrupt-file or internal errors - the operator remedy for a locked file differs entirely from the remedy for a broken one. | [`DESIGN_NOTES.md section 5`](DESIGN_NOTES.md) | - |
+| [`D-013`](#D-013) | 🔵 | security | Encrypted inputs refused with the password exit class | 2026-08-31 | Until password support lands, encrypted input PDFs are refused with exit 5 (PASSWORD_REQUIRED; UNSUPPORTED_ENCRYPTION when the AES backend is unavailable) instead of surfacing as corrupt-file or internal errors - the operator remedy for a locked file differs entirely from the remedy for a broken one. | [`DESIGN_NOTES.md section 5`](DESIGN_NOTES.md) | - |
 | [`D-014`](#D-014) | 🟢 | security | Attachment names sanitized always, never trusted | 2026-09-01 | Every attachment name is reduced to a safe basename by a pure, table-tested sanitizer (separator normalization, basename, control-char strip, length cap, deterministic fallback); hostile names rename rather than fail the PDF, originals are logged when changed, and resolved write targets are re-verified to stay inside PDFOPS_OUTPUT_DIR. | [`DESIGN_NOTES.md section 7`](DESIGN_NOTES.md) | - |
 | [`D-015`](#D-015) | 🟢 | error-handling | Extract semantics: deterministic order, all-or-nothing conflicts, zero-attachments success | 2026-09-01 | Extraction follows PDF name-tree order (deterministic across runs); duplicate names get -1/-2 suffixes; pre-existing files or symlinks at any target name fail the run before anything is written; zero attachments is exit 0 with attachments_extracted=0, flipped to exit 3 NO_ATTACHMENTS by PDFOPS_FAIL_ON_NO_ATTACHMENTS=true. | [`DESIGN_NOTES.md section 7`](DESIGN_NOTES.md) | - |
 | [`D-016`](#D-016) | 🟢 | pdf-engine | Extract covers document-level attachments only | 2026-09-01 | Only the document-level /Names/EmbeddedFiles tree is extracted; page-level /FileAttachment annotations (sticky-note attachments) are a documented limitation and future work rather than a half-supported path. | [`DESIGN_NOTES.md section 7`](DESIGN_NOTES.md) | - |
+| [`D-017`](#D-017) | 🟢 | security | Password channels with a layered, tested no-leak guarantee | 2026-09-01 | One password via mutually exclusive channels - PDFOPS_PASSWORD_FILE (mounted secret, preferred) or PDFOPS_PASSWORD (discouraged, documented why); parser stays filesystem-free by capturing the source and resolving in one step before dispatch. No-leak is layered: Secret wrapper renders ***, the log layer scrubs registered values incl. tracebacks, the entrypoint deletes secret vars from the live env, and leak tests assert the literal password appears in no output on success, failure, or crash paths. | [`DESIGN_NOTES.md section 8`](DESIGN_NOTES.md) | - |
+| [`D-018`](#D-018) | 🟢 | pdf-engine | Decrypt semantics: empty-password auto-try, algorithm + password_type logged | 2026-09-01 | The plaintext /Encrypt dictionary yields the algorithm before any password work (logged per input); with no password supplied the spec-standard empty-password verification runs first - a side-effect-free hash check, the same thing every viewer does - so owner-only permissions-locked PDFs just work, and PASSWORD_REQUIRED fires only when the empty try fails. Successful opens log password_type user/owner/empty; a wrong password names the failing input; an unneeded password draws a password_unused warning. | [`DESIGN_NOTES.md section 8`](DESIGN_NOTES.md) | - |
+| [`D-019`](#D-019) | 🟢 | security | Output encryption: never|inherit|always tri-state, AES-256, explicit-password fallback | 2026-09-01 | PDFOPS_OUTPUT_ENCRYPTION: never (default; plaintext output with a loud security_downgrade warning when inputs were encrypted), inherit (encrypt iff any input was encrypted - confidentiality never decreases), always. Output password from its own channel pair, falling back only to an explicitly supplied input password - never the empty auto-try (MISSING_OUTPUT_PASSWORD instead). Output always AES-256 regardless of input schemes; an output password with mode never is a hard error. | [`DESIGN_NOTES.md section 8`](DESIGN_NOTES.md) | - |
 
-**Counts:** 16 total decisions - 12 🟢 decided, 0 🟡 pending, 4 ⏸ deferred.
+**Counts:** 19 total decisions - 14 🟢 decided, 0 🟡 pending, 4 ⏸ deferred, 1 🔵 superseded.
 
 ### Index by area
 
@@ -39,12 +42,12 @@ This document is the authoritative register of all architectural decisions for t
 |---|---|---|
 | config | 4 | D-004, D-007, D-008, D-009 |
 | error-handling | 4 | D-003, D-006, D-012, D-015 |
-| pdf-engine | 3 | D-002, D-011, D-016 |
-| security | 2 | D-013, D-014 |
+| pdf-engine | 4 | D-002, D-011, D-016, D-018 |
+| security | 4 | D-013, D-014, D-017, D-019 |
 | observability | 1 | D-005 |
 | project | 1 | D-001 |
 | reliability | 1 | D-010 |
-| **Total** | **16** | |
+| **Total** | **19** | |
 
 ### Open decisions (🟡 Pending + ⏸ Deferred)
 
@@ -209,7 +212,8 @@ Per-decision details: status, decided date, rationale, related decisions, and th
 <a id="D-013"></a>
 ### D-013
 - **Title:** Encrypted inputs refused with the password exit class
-- **Status:** 🟢 Decided
+- **Status:** 🔵 Superseded
+- **Superseded by:** [D-017](#D-017)
 - **Area:** security
 - **Decided on:** 2026-08-31
 - **Summary:** Until password support lands, encrypted input PDFs are refused with exit 5 (PASSWORD_REQUIRED; UNSUPPORTED_ENCRYPTION when the AES backend is unavailable) instead of surfacing as corrupt-file or internal errors - the operator remedy for a locked file differs entirely from the remedy for a broken one.
@@ -249,6 +253,40 @@ Per-decision details: status, decided date, rationale, related decisions, and th
 - **Risk:** low
 - **Reversibility:** cheap
 - **Where:** [`DESIGN_NOTES.md section 7`](DESIGN_NOTES.md)
+
+<a id="D-017"></a>
+### D-017
+- **Title:** Password channels with a layered, tested no-leak guarantee
+- **Status:** 🟢 Decided
+- **Area:** security
+- **Decided on:** 2026-09-01
+- **Summary:** One password via mutually exclusive channels - PDFOPS_PASSWORD_FILE (mounted secret, preferred) or PDFOPS_PASSWORD (discouraged, documented why); parser stays filesystem-free by capturing the source and resolving in one step before dispatch. No-leak is layered: Secret wrapper renders ***, the log layer scrubs registered values incl. tracebacks, the entrypoint deletes secret vars from the live env, and leak tests assert the literal password appears in no output on success, failure, or crash paths.
+- **Risk:** high
+- **Reversibility:** cheap
+- **Supersedes:** [D-013](#D-013)
+- **Where:** [`DESIGN_NOTES.md section 8`](DESIGN_NOTES.md)
+
+<a id="D-018"></a>
+### D-018
+- **Title:** Decrypt semantics: empty-password auto-try, algorithm + password_type logged
+- **Status:** 🟢 Decided
+- **Area:** pdf-engine
+- **Decided on:** 2026-09-01
+- **Summary:** The plaintext /Encrypt dictionary yields the algorithm before any password work (logged per input); with no password supplied the spec-standard empty-password verification runs first - a side-effect-free hash check, the same thing every viewer does - so owner-only permissions-locked PDFs just work, and PASSWORD_REQUIRED fires only when the empty try fails. Successful opens log password_type user/owner/empty; a wrong password names the failing input; an unneeded password draws a password_unused warning.
+- **Risk:** medium
+- **Reversibility:** cheap
+- **Where:** [`DESIGN_NOTES.md section 8`](DESIGN_NOTES.md)
+
+<a id="D-019"></a>
+### D-019
+- **Title:** Output encryption: never|inherit|always tri-state, AES-256, explicit-password fallback
+- **Status:** 🟢 Decided
+- **Area:** security
+- **Decided on:** 2026-09-01
+- **Summary:** PDFOPS_OUTPUT_ENCRYPTION: never (default; plaintext output with a loud security_downgrade warning when inputs were encrypted), inherit (encrypt iff any input was encrypted - confidentiality never decreases), always. Output password from its own channel pair, falling back only to an explicitly supplied input password - never the empty auto-try (MISSING_OUTPUT_PASSWORD instead). Output always AES-256 regardless of input schemes; an output password with mode never is a hard error.
+- **Risk:** medium
+- **Reversibility:** cheap
+- **Where:** [`DESIGN_NOTES.md section 8`](DESIGN_NOTES.md)
 
 ---
 

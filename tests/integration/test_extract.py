@@ -375,3 +375,16 @@ class TestInvariants:
         assert code == 0
         assert [e["event"] for e in events] == ["operation_complete"]
         assert events[-1]["attachments_extracted"] == 1
+
+
+class TestExtractPasswordWarnings:
+    def test_password_unused_warning_on_plain_carrier(
+        self,
+        make_pdf_with_attachments: Callable[..., Path],
+        out_dir: Path,
+        run_app: RunApp,
+    ) -> None:
+        carrier = make_pdf_with_attachments([("a.txt", b"x")])
+        code, events = run_app(extract_env(carrier, out_dir, PDFOPS_PASSWORD="some-pw"))
+        assert code == 0
+        assert any(e["event"] == "password_unused" for e in events)

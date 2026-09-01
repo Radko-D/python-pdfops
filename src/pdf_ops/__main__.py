@@ -9,11 +9,20 @@ from __future__ import annotations
 import os
 import sys
 
+from pdf_ops.config import VAR_OUTPUT_PASSWORD, VAR_PASSWORD
 from pdf_ops.main import run
 
 
 def main() -> None:
-    sys.exit(run(os.environ))
+    env = dict(os.environ)
+    # Scrub secret values from the live environment before any work, so child
+    # processes and later os.environ readers see nothing. (This cannot erase
+    # the initial environment block - /proc/<pid>/environ and `docker
+    # inspect` still show it, which is exactly why the file channel is the
+    # preferred one.)
+    for var in (VAR_PASSWORD, VAR_OUTPUT_PASSWORD):
+        os.environ.pop(var, None)
+    sys.exit(run(env))
 
 
 if __name__ == "__main__":

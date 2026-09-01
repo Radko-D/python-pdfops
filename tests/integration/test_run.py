@@ -52,7 +52,7 @@ class TestSuccessContract:
 
     @pytest.fixture
     def successful_dispatch(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        def fake_dispatch(config: Any, logger: logging.Logger) -> dict[str, Any]:
+        def fake_dispatch(config: Any, secrets: Any, logger: logging.Logger) -> dict[str, Any]:
             logger.info("operation_started", extra={"operation": config.operation.value})
             return {}
 
@@ -101,7 +101,7 @@ class TestUnexpectedErrorBoundary:
 
     @pytest.fixture
     def crashing_dispatch(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        def fake_dispatch(config: Any, logger: logging.Logger) -> dict[str, Any]:
+        def fake_dispatch(config: Any, secrets: Any, logger: logging.Logger) -> dict[str, Any]:
             logger.info("operation_started", extra={"operation": config.operation.value})
             raise RuntimeError("simulated internal bug")
 

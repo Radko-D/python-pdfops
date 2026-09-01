@@ -4,8 +4,8 @@ Containerized PDF operations for workflow systems (e.g. Argo Workflows): exactly
 operation per container run - **merge** multiple PDFs into one, or **extract** the
 attachments embedded in a PDF - configured entirely through environment variables.
 
-> **Status: work in progress.** Both operations are implemented; next up are password
-> support, an overwrite policy for retries, and container hardening. See
+> **Status: work in progress.** Both operations and password support are implemented;
+> next up are an overwrite policy for retries and container hardening. See
 > [`docs/DECISIONS.md`](docs/DECISIONS.md) for the decision register and
 > [`docs/DESIGN_NOTES.md`](docs/DESIGN_NOTES.md) for design notes.
 
@@ -33,6 +33,16 @@ docker run --rm \
   -e PDFOPS_OUTPUT_DIR=/out \
   pdf-ops
 
+# Merge an encrypted PDF, re-encrypting the output with the same password
+docker run --rm \
+  -v "$PWD/in:/in:ro" -v "$PWD/out:/out" -v "$PWD/secret:/secret:ro" \
+  -e PDFOPS_OPERATION=merge \
+  -e PDFOPS_INPUTS=/in/locked.pdf:/in/plain.pdf \
+  -e PDFOPS_OUTPUT=/out/merged.pdf \
+  -e PDFOPS_PASSWORD_FILE=/secret/pw \
+  -e PDFOPS_OUTPUT_ENCRYPTION=inherit \
+  pdf-ops
+
 # Invalid configuration fails fast (exit 2, machine-readable error event)
 docker run --rm -e PDFOPS_OPERATION=bogus pdf-ops
 ```
@@ -50,6 +60,11 @@ from `PDFOPS_*` variables, and the mounted volumes provide inputs and receive ou
 | `PDFOPS_INPUT` | extract | yes | the PDF to extract attachments from | - |
 | `PDFOPS_OUTPUT_DIR` | extract | yes | existing directory receiving the attachment files | - |
 | `PDFOPS_FAIL_ON_NO_ATTACHMENTS` | extract | no | `true`, `false` (case-insensitive) - fail (exit 3) when the PDF has no attachments | `false` |
+| `PDFOPS_PASSWORD_FILE` | both | no | path to a mounted secret file holding the password (preferred channel; one trailing newline stripped) | - |
+| `PDFOPS_PASSWORD` | both | no | the password itself - discouraged: env values leak via `kubectl describe`, `/proc/<pid>/environ`, crash tooling | - |
+| `PDFOPS_OUTPUT_ENCRYPTION` | merge | no | `never`, `inherit`, `always` (case-insensitive) - see below | `never` |
+| `PDFOPS_OUTPUT_PASSWORD_FILE` | merge | no | secret file holding the password for the merged output | - |
+| `PDFOPS_OUTPUT_PASSWORD` | merge | no | output password as a direct value (same caveats as `PDFOPS_PASSWORD`) | - |
 | `PDFOPS_LOG_LEVEL` | - | no | `debug`, `info`, `warning`, `error` (case-insensitive) | `info` |
 
 Strictness rules, all exit 2: any other `PDFOPS_*` variable is rejected as a probable
@@ -63,8 +78,28 @@ repeated path is almost always a templating bug that would silently duplicate co
 - The container runs as **non-root UID 10001**: input mounts need to be readable and the
   output mount writable by that UID (`chmod`/`chown` for plain Docker; `fsGroup` in a pod
   `securityContext` on Kubernetes).
-- Encrypted input PDFs are currently refused (exit 5, `PASSWORD_REQUIRED` /
-  `UNSUPPORTED_ENCRYPTION`); password support is the next piece of work.
+- **Passwords.** One password (via `PDFOPS_PASSWORD_FILE`, preferably) is tried against
+  every encrypted input; owner-only "permissions-locked" PDFs open without a password via
+  the spec-standard empty-password try, exactly like every PDF viewer. Wrong password ->
+  exit 5 naming the failing input. The password itself never appears in any output: the
+  in-process `Secret` wrapper renders as `***`, the logging layer scrubs registered secret
+  values from every event including tracebacks, and the process scrubs `PDFOPS_PASSWORD`
+  from its own environment on startup. Each `input_opened` event reports the encryption
+  algorithm (read from the PDF's plaintext `/Encrypt` dictionary) and how the file opened
+  (`user`/`owner`/`empty`). A permissions-locked input among user-locked ones never fails
+  just because a password was supplied: the empty try still applies per input. Passwords
+  containing control characters are rejected (exit 2) as encoding accidents. Note the env
+  channel's inherent limit: the initial environment block stays visible to `docker
+  inspect` and `/proc/<pid>/environ` - the file channel is the one that keeps the value
+  out of the process's environment entirely.
+- **Output encryption** (`PDFOPS_OUTPUT_ENCRYPTION`): `never` (default) writes a plaintext
+  output and emits a loud `security_downgrade` warning when inputs were encrypted;
+  `inherit` encrypts the output iff at least one input was encrypted - confidentiality
+  never decreases through this step; `always` encrypts unconditionally. The output
+  password comes from `PDFOPS_OUTPUT_PASSWORD_FILE`/`PDFOPS_OUTPUT_PASSWORD`, falling
+  back to the *explicitly supplied* input password (never the empty auto-try). Output
+  encryption is always AES-256, whatever the inputs used. Supplying an output password
+  while the mode is `never` is a hard configuration error.
 - Merge order is exactly the order of `PDFOPS_INPUTS` - deterministic across retries.
 - Output is written **atomically**: work goes to a temp file in the output directory,
   then a single rename. The final path either holds a complete PDF or nothing - a
@@ -92,7 +127,7 @@ repeated path is almost always a templating bug that would silently duplicate co
 | 2 | invalid configuration |
 | 3 | input missing/unreadable |
 | 4 | invalid or corrupt PDF |
-| 5 | password required/wrong/unsupported (with password support) |
+| 5 | password required/wrong/unsupported |
 | 6 | output conflict or output location unusable |
 
 Every run ends with exactly one terminal JSON event on stdout - `operation_complete`

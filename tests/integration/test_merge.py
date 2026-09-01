@@ -11,6 +11,7 @@ import pytest
 from pypdf import PdfReader
 
 import pdf_ops.merge
+from pdf_ops.engine import OpenedInput
 from pdf_ops.errors import InvalidPdfError
 from tests.conftest import RunApp
 
@@ -47,10 +48,15 @@ class TestMergeSuccess:
         assert [e["event"] for e in events] == [
             "config_loaded",
             "operation_started",
+            "input_opened",
+            "input_opened",
             "merge_written",
             "operation_complete",
         ]
-        assert events[2]["pages_per_input"] == [2, 3]
+        opened = [e for e in events if e["event"] == "input_opened"]
+        assert [e["encrypted"] for e in opened] == [False, False]
+        assert events[-2]["pages_per_input"] == [2, 3]
+        assert events[-2]["output_encrypted"] is False
         terminal = events[-1]
         assert terminal["event"] == "operation_complete"
         assert terminal["inputs_merged"] == 2
@@ -262,7 +268,12 @@ class FakeEngine:
     def __init__(self, error: Exception) -> None:
         self.error = error
 
-    def merge(self, inputs: object, destination: Path) -> object:
+    def open_input(self, path: Path, password: object) -> OpenedInput:
+        return OpenedInput(
+            path=path, handle=None, pages=1, encrypted=False, algorithm=None, password_type=None
+        )
+
+    def merge_to(self, inputs: object, destination: Path, output_password: object) -> None:
         destination.write_bytes(b"%PDF- partial garbage")
         raise self.error
 
