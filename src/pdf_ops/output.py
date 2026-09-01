@@ -20,6 +20,17 @@ from typing import NoReturn
 from pdf_ops.errors import OutputError
 
 
+def check_output_dir(directory: Path) -> None:
+    """Fail fast when the extraction target directory is absent."""
+    if not directory.is_dir():
+        raise OutputError(
+            f"output directory {directory} does not exist "
+            "(output locations are mounted; a missing directory is a workflow bug)",
+            error_code="OUTPUT_DIR_MISSING",
+            context={"output_dir": str(directory)},
+        )
+
+
 def check_output_path(path: Path) -> None:
     """Fail fast on unusable output locations, before any work is done."""
     parent = path.parent

@@ -99,14 +99,16 @@ def make_corrupt_pdf(make_pdf: Callable[..., Path], tmp_path: Path) -> Callable[
     return _make
 
 
-def _build_raw_pdf(objects: list[str]) -> bytes:
+def _build_raw_pdf(objects: list[str | bytes]) -> bytes:
     """Minimal hand-assembled PDF with a correct xref - for structural cases
-    the writer API refuses to produce (dangling references, missing /Pages)."""
+    the writer API refuses to produce (dangling references, missing /Pages,
+    raw name-tree bytes)."""
     out = bytearray(b"%PDF-1.4\n")
     offsets: list[int] = []
     for number, body in enumerate(objects, start=1):
         offsets.append(len(out))
-        out += f"{number} 0 obj\n{body}\nendobj\n".encode()
+        body_bytes = body if isinstance(body, bytes) else body.encode()
+        out += f"{number} 0 obj\n".encode() + body_bytes + b"\nendobj\n"
     xref_pos = len(out)
     out += f"xref\n0 {len(objects) + 1}\n".encode()
     out += b"0000000000 65535 f \n"
@@ -163,6 +165,66 @@ def make_pathological_pdf(tmp_path: Path) -> Callable[..., Path]:
     def _make(name: str = "pathological.pdf") -> Path:
         path = tmp_path / name
         path.write_bytes(_build_raw_pdf(["<< /Type /Catalog >>"]))
+        return path
+
+    return _make
+
+
+@pytest.fixture
+def make_pdf_with_attachments(tmp_path: Path) -> Callable[..., Path]:
+    """A one-page PDF carrying the given embedded files.
+
+    pypdf writes names verbatim into the name tree, so hostile names
+    (traversal, separators, empty) and duplicates survive the roundtrip -
+    exactly what the sanitizer tests need. Extraction order is the PDF
+    name-tree order (sorted by name), not insertion order.
+    """
+
+    def _make(attachments: list[tuple[str, bytes]], name: str = "carrier.pdf") -> Path:
+        writer = PdfWriter()
+        writer.add_blank_page(width=200, height=300)
+        for attachment_name, data in attachments:
+            writer.add_attachment(attachment_name, data)
+        path = tmp_path / name
+        with path.open("wb") as handle:
+            writer.write(handle)
+        return path
+
+    return _make
+
+
+@pytest.fixture
+def make_raw_attachment_pdf(tmp_path: Path) -> Callable[..., Path]:
+    """An attachment built directly in the /Names/EmbeddedFiles tree, with the
+    name given as a raw PDF string literal - reaches name shapes (UTF-16,
+    non-UTF-8 bytes) and stream filters the writer API can't produce."""
+
+    def _make(
+        name_literal: bytes,
+        stream: bytes = b"payload",
+        filter_entry: bytes = b"",
+        name: str = "raw-carrier.pdf",
+    ) -> Path:
+        length = str(len(stream)).encode()
+        filter_part = (b" /Filter " + filter_entry) if filter_entry else b""
+        path = tmp_path / name
+        path.write_bytes(
+            _build_raw_pdf(
+                [
+                    b"<< /Type /Catalog /Pages 2 0 R /Names << /EmbeddedFiles "
+                    b"<< /Names [ " + name_literal + b" 4 0 R ] >> >> >>",
+                    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+                    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 300] >>",
+                    b"<< /Type /Filespec /F " + name_literal + b" /EF << /F 5 0 R >> >>",
+                    b"<< /Length "
+                    + length
+                    + filter_part
+                    + b" >>\nstream\n"
+                    + stream
+                    + b"\nendstream",
+                ]
+            )
+        )
         return path
 
     return _make

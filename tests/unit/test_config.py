@@ -19,6 +19,12 @@ MERGE_ENV = {
     "PDFOPS_OUTPUT": "/out/m.pdf",
 }
 
+EXTRACT_ENV = {
+    "PDFOPS_OPERATION": "extract",
+    "PDFOPS_INPUT": "/in/doc.pdf",
+    "PDFOPS_OUTPUT_DIR": "/out",
+}
+
 
 class TestOperation:
     def test_merge_parses_to_merge_config(self) -> None:
@@ -27,14 +33,18 @@ class TestOperation:
         assert config.operation is Operation.MERGE
 
     def test_extract_parses_to_extract_config(self) -> None:
-        config = parse_config({"PDFOPS_OPERATION": "extract"})
+        config = parse_config(EXTRACT_ENV)
         assert isinstance(config, ExtractConfig)
         assert config.operation is Operation.EXTRACT
+        assert config.input == Path("/in/doc.pdf")
+        assert config.output_dir == Path("/out")
+        assert config.fail_on_no_attachments is False
 
     def test_surrounding_whitespace_is_tolerated(self) -> None:
         # Templated env values (workflow parameters, shell heredocs) often
         # carry stray whitespace; stripping it is the predictable choice.
-        assert isinstance(parse_config({"PDFOPS_OPERATION": " extract\n"}), ExtractConfig)
+        env = EXTRACT_ENV | {"PDFOPS_OPERATION": " extract\n"}
+        assert isinstance(parse_config(env), ExtractConfig)
 
     @pytest.mark.parametrize("env", [{}, {"PDFOPS_OPERATION": ""}, {"PDFOPS_OPERATION": "   "}])
     def test_missing_or_empty_operation(self, env: dict[str, str]) -> None:
@@ -54,7 +64,7 @@ class TestOperation:
 
 class TestLogLevel:
     def test_defaults_to_info(self) -> None:
-        assert parse_config({"PDFOPS_OPERATION": "extract"}).log_level == logging.INFO
+        assert parse_config(EXTRACT_ENV).log_level == logging.INFO
 
     @pytest.mark.parametrize(
         ("value", "expected"),
@@ -67,13 +77,12 @@ class TestLogLevel:
         ],
     )
     def test_accepted_levels_case_insensitive(self, value: str, expected: int) -> None:
-        env = {"PDFOPS_OPERATION": "extract", "PDFOPS_LOG_LEVEL": value}
-        assert parse_config(env).log_level == expected
+        assert parse_config(EXTRACT_ENV | {"PDFOPS_LOG_LEVEL": value}).log_level == expected
 
     @pytest.mark.parametrize("value", ["verbose", "TRACE", "42"])
     def test_invalid_level_is_config_error(self, value: str) -> None:
         with pytest.raises(ConfigError) as exc_info:
-            parse_config({"PDFOPS_OPERATION": "extract", "PDFOPS_LOG_LEVEL": value})
+            parse_config(EXTRACT_ENV | {"PDFOPS_LOG_LEVEL": value})
         assert exc_info.value.error_code == "INVALID_LOG_LEVEL"
 
 
@@ -138,7 +147,47 @@ class TestMergeVars:
 
     @pytest.mark.parametrize("var", ["PDFOPS_INPUTS", "PDFOPS_OUTPUT"])
     def test_merge_vars_inapplicable_to_extract(self, var: str) -> None:
-        env = {"PDFOPS_OPERATION": "extract", var: "/some/path"}
+        env = EXTRACT_ENV | {var: "/some/path"}
+        with pytest.raises(ConfigError) as exc_info:
+            parse_config(env)
+        assert exc_info.value.error_code == "INAPPLICABLE_VAR"
+        assert var in exc_info.value.message
+
+
+class TestExtractVars:
+    @pytest.mark.parametrize("var", ["PDFOPS_INPUT", "PDFOPS_OUTPUT_DIR"])
+    def test_extract_requires_input_and_output_dir(self, var: str) -> None:
+        env = dict(EXTRACT_ENV)
+        del env[var]
+        with pytest.raises(ConfigError) as exc_info:
+            parse_config(env)
+        assert exc_info.value.error_code == "MISSING_VAR"
+        assert var in exc_info.value.message
+
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [("true", True), ("TRUE", True), ("false", False), (" False\n", False)],
+    )
+    def test_fail_on_no_attachments_flag(self, value: str, expected: bool) -> None:
+        env = EXTRACT_ENV | {"PDFOPS_FAIL_ON_NO_ATTACHMENTS": value}
+        config = parse_config(env)
+        assert isinstance(config, ExtractConfig)
+        assert config.fail_on_no_attachments is expected
+
+    @pytest.mark.parametrize("value", ["yes", "1", "on", "enabled"])
+    def test_invalid_flag_value_rejected(self, value: str) -> None:
+        # Predictability beats convenience: only true/false are accepted, so
+        # a templating mistake can't silently flip a policy.
+        env = EXTRACT_ENV | {"PDFOPS_FAIL_ON_NO_ATTACHMENTS": value}
+        with pytest.raises(ConfigError) as exc_info:
+            parse_config(env)
+        assert exc_info.value.error_code == "INVALID_FLAG"
+
+    @pytest.mark.parametrize(
+        "var", ["PDFOPS_INPUT", "PDFOPS_OUTPUT_DIR", "PDFOPS_FAIL_ON_NO_ATTACHMENTS"]
+    )
+    def test_extract_vars_inapplicable_to_merge(self, var: str) -> None:
+        env = MERGE_ENV | {var: "x"}
         with pytest.raises(ConfigError) as exc_info:
             parse_config(env)
         assert exc_info.value.error_code == "INAPPLICABLE_VAR"
@@ -147,7 +196,7 @@ class TestMergeVars:
 
 class TestUnknownVars:
     def test_unknown_prefixed_var_is_rejected(self) -> None:
-        env = {"PDFOPS_OPERATION": "extract", "PDFOPS_OPERATOIN": "merge"}
+        env = EXTRACT_ENV | {"PDFOPS_OPERATOIN": "merge"}
         with pytest.raises(ConfigError) as exc_info:
             parse_config(env)
         assert exc_info.value.error_code == "UNKNOWN_VAR"
@@ -155,16 +204,12 @@ class TestUnknownVars:
         assert exc_info.value.context["unknown_vars"] == ["PDFOPS_OPERATOIN"]
 
     def test_multiple_unknown_vars_all_reported(self) -> None:
-        env = {
-            "PDFOPS_OPERATION": "extract",
-            "PDFOPS_ZZZ": "1",
-            "PDFOPS_AAA": "2",
-        }
+        env = EXTRACT_ENV | {"PDFOPS_ZZZ": "1", "PDFOPS_AAA": "2"}
         with pytest.raises(ConfigError) as exc_info:
             parse_config(env)
         assert exc_info.value.context["unknown_vars"] == ["PDFOPS_AAA", "PDFOPS_ZZZ"]
 
     def test_unprefixed_vars_are_ignored(self) -> None:
         # The container inherits PATH, HOME, etc. - only our namespace is policed.
-        env = {"PDFOPS_OPERATION": "extract", "PATH": "/usr/bin", "HOME": "/home/x"}
+        env = EXTRACT_ENV | {"PATH": "/usr/bin", "HOME": "/home/x"}
         assert isinstance(parse_config(env), ExtractConfig)

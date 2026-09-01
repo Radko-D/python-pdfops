@@ -8,6 +8,7 @@ from typing import Any
 
 from pdf_ops.config import Config, ExtractConfig, MergeConfig, parse_config
 from pdf_ops.errors import ExitCode, PdfOpsError
+from pdf_ops.extract import run_extract
 from pdf_ops.logging_setup import emit_terminal, setup_logging
 from pdf_ops.merge import run_merge
 
@@ -77,4 +78,4 @@ def _dispatch(config: Config, logger: logging.Logger) -> dict[str, Any] | None:
         case MergeConfig():
             return run_merge(config, logger)
         case ExtractConfig():
-            raise NotImplementedError("extract is not implemented yet")
+            return run_extract(config, logger)

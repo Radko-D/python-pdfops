@@ -25,12 +25,33 @@ class MergeStats:
         return sum(self.pages_per_input)
 
 
+@dataclass(frozen=True, slots=True)
+class Attachment:
+    """One embedded file as stored in the PDF.
+
+    ``name`` is UNTRUSTED input straight from the document - it may contain
+    path separators, control characters, or be empty, and names are not
+    unique. Callers must sanitize before touching a filesystem.
+    """
+
+    name: str
+    data: bytes
+
+
 class PdfEngine(Protocol):
     def merge(self, inputs: Sequence[Path], destination: Path) -> MergeStats:
         """Merge ``inputs`` (in order) into a PDF written at ``destination``.
 
         ``destination`` is a temp path provided by the atomic-write layer.
         Raises InvalidPdfError for inputs the library cannot parse.
+        """
+        ...
+
+    def list_attachments(self, source: Path) -> list[Attachment]:
+        """Embedded files of ``source``, in the document's name-tree order
+        (deterministic across runs). Duplicate names are preserved.
+
+        Raises InvalidPdfError for files the library cannot parse.
         """
         ...
 

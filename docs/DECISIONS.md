@@ -2,7 +2,7 @@
 
 > **Project:** Containerized PDF operations (merge, extract attachments) for workflow systems
 > **Started:** 2026-08-31
-> **Last updated:** 2026-08-31
+> **Last updated:** 2026-09-01
 
 This document is the authoritative register of all architectural decisions for this project. New decisions are appended with the next available `D-###`. See [DECISION_TRACKING_STANDARD.md](DECISION_TRACKING_STANDARD.md) for format, vocabularies, and workflow. CI validation: [`scripts/validate_decisions.py`](scripts/validate_decisions.py).
 
@@ -25,8 +25,11 @@ This document is the authoritative register of all architectural decisions for t
 | [`D-011`](#D-011) | 🟢 | pdf-engine | Merge is pages-only; input attachments/bookmarks/metadata not carried | 2026-08-31 | The merged output carries pages only: bookmarks, form fields, metadata, and embedded attachments of the inputs are not copied (no mainstream Python library copies /Names/EmbeddedFiles on merge - attachments would drop silently). Documented limitation; detect-and-warn vs fail-loud vs qpdf --copy-attachments-from evaluated when attachment handling is built out. | [`DESIGN_NOTES.md section 5`](DESIGN_NOTES.md) | - |
 | [`D-012`](#D-012) | 🟢 | error-handling | Merge input validation: collect-all, first problem sets exit class | 2026-08-31 | Every input is checked up front (exists, is a file, readable, %PDF- magic) before any write; all problems are reported in one failure event with the full list in context.problems, and the exit class follows the first problem in input order. Duplicate inputs are a hard config error; a single input is a valid merge. | [`DESIGN_NOTES.md section 6`](DESIGN_NOTES.md) | - |
 | [`D-013`](#D-013) | 🟢 | security | Encrypted inputs refused with the password exit class | 2026-08-31 | Until password support lands, encrypted input PDFs are refused with exit 5 (PASSWORD_REQUIRED; UNSUPPORTED_ENCRYPTION when the AES backend is unavailable) instead of surfacing as corrupt-file or internal errors - the operator remedy for a locked file differs entirely from the remedy for a broken one. | [`DESIGN_NOTES.md section 5`](DESIGN_NOTES.md) | - |
+| [`D-014`](#D-014) | 🟢 | security | Attachment names sanitized always, never trusted | 2026-09-01 | Every attachment name is reduced to a safe basename by a pure, table-tested sanitizer (separator normalization, basename, control-char strip, length cap, deterministic fallback); hostile names rename rather than fail the PDF, originals are logged when changed, and resolved write targets are re-verified to stay inside PDFOPS_OUTPUT_DIR. | [`DESIGN_NOTES.md section 7`](DESIGN_NOTES.md) | - |
+| [`D-015`](#D-015) | 🟢 | error-handling | Extract semantics: deterministic order, all-or-nothing conflicts, zero-attachments success | 2026-09-01 | Extraction follows PDF name-tree order (deterministic across runs); duplicate names get -1/-2 suffixes; pre-existing files or symlinks at any target name fail the run before anything is written; zero attachments is exit 0 with attachments_extracted=0, flipped to exit 3 NO_ATTACHMENTS by PDFOPS_FAIL_ON_NO_ATTACHMENTS=true. | [`DESIGN_NOTES.md section 7`](DESIGN_NOTES.md) | - |
+| [`D-016`](#D-016) | 🟢 | pdf-engine | Extract covers document-level attachments only | 2026-09-01 | Only the document-level /Names/EmbeddedFiles tree is extracted; page-level /FileAttachment annotations (sticky-note attachments) are a documented limitation and future work rather than a half-supported path. | [`DESIGN_NOTES.md section 7`](DESIGN_NOTES.md) | - |
 
-**Counts:** 13 total decisions - 9 🟢 decided, 0 🟡 pending, 4 ⏸ deferred.
+**Counts:** 16 total decisions - 12 🟢 decided, 0 🟡 pending, 4 ⏸ deferred.
 
 ### Index by area
 
@@ -35,13 +38,13 @@ This document is the authoritative register of all architectural decisions for t
 | Area | Count | IDs |
 |---|---|---|
 | config | 4 | D-004, D-007, D-008, D-009 |
-| error-handling | 3 | D-003, D-006, D-012 |
-| pdf-engine | 2 | D-002, D-011 |
+| error-handling | 4 | D-003, D-006, D-012, D-015 |
+| pdf-engine | 3 | D-002, D-011, D-016 |
+| security | 2 | D-013, D-014 |
 | observability | 1 | D-005 |
 | project | 1 | D-001 |
 | reliability | 1 | D-010 |
-| security | 1 | D-013 |
-| **Total** | **13** | |
+| **Total** | **16** | |
 
 ### Open decisions (🟡 Pending + ⏸ Deferred)
 
@@ -213,6 +216,39 @@ Per-decision details: status, decided date, rationale, related decisions, and th
 - **Risk:** low
 - **Reversibility:** cheap
 - **Where:** [`DESIGN_NOTES.md section 5`](DESIGN_NOTES.md)
+
+<a id="D-014"></a>
+### D-014
+- **Title:** Attachment names sanitized always, never trusted
+- **Status:** 🟢 Decided
+- **Area:** security
+- **Decided on:** 2026-09-01
+- **Summary:** Every attachment name is reduced to a safe basename by a pure, table-tested sanitizer (separator normalization, basename, control-char strip, length cap, deterministic fallback); hostile names rename rather than fail the PDF, originals are logged when changed, and resolved write targets are re-verified to stay inside PDFOPS_OUTPUT_DIR.
+- **Risk:** high
+- **Reversibility:** cheap
+- **Where:** [`DESIGN_NOTES.md section 7`](DESIGN_NOTES.md)
+
+<a id="D-015"></a>
+### D-015
+- **Title:** Extract semantics: deterministic order, all-or-nothing conflicts, zero-attachments success
+- **Status:** 🟢 Decided
+- **Area:** error-handling
+- **Decided on:** 2026-09-01
+- **Summary:** Extraction follows PDF name-tree order (deterministic across runs); duplicate names get -1/-2 suffixes; pre-existing files or symlinks at any target name fail the run before anything is written; zero attachments is exit 0 with attachments_extracted=0, flipped to exit 3 NO_ATTACHMENTS by PDFOPS_FAIL_ON_NO_ATTACHMENTS=true.
+- **Risk:** medium
+- **Reversibility:** cheap
+- **Where:** [`DESIGN_NOTES.md section 7`](DESIGN_NOTES.md)
+
+<a id="D-016"></a>
+### D-016
+- **Title:** Extract covers document-level attachments only
+- **Status:** 🟢 Decided
+- **Area:** pdf-engine
+- **Decided on:** 2026-09-01
+- **Summary:** Only the document-level /Names/EmbeddedFiles tree is extracted; page-level /FileAttachment annotations (sticky-note attachments) are a documented limitation and future work rather than a half-supported path.
+- **Risk:** low
+- **Reversibility:** cheap
+- **Where:** [`DESIGN_NOTES.md section 7`](DESIGN_NOTES.md)
 
 ---
 

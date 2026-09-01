@@ -83,33 +83,60 @@ class TestSuccessContract:
     ) -> None:
         # PDFOPS_LOG_LEVEL filters lifecycle events but must never suppress
         # the terminal event - the workflow engine's only success signal.
-        env = {"PDFOPS_OPERATION": "extract", "PDFOPS_LOG_LEVEL": "error"}
+        env = {
+            "PDFOPS_OPERATION": "extract",
+            "PDFOPS_INPUT": "/in/doc.pdf",
+            "PDFOPS_OUTPUT_DIR": "/out",
+            "PDFOPS_LOG_LEVEL": "error",
+        }
         code, events = run_app(env)
         assert code == 0
         assert [e["event"] for e in events] == ["operation_complete"]
 
 
 class TestUnexpectedErrorBoundary:
-    """Extract is not implemented yet; its NotImplementedError exercises the
-    unexpected-error boundary (exit 1 with a logged traceback)."""
+    """A dispatcher stub raising a plain exception pins the unexpected-error
+    boundary (exit 1 with a logged traceback) independent of any real
+    operation code."""
 
-    def test_extract_hits_not_implemented_boundary(self, run_app: RunApp) -> None:
-        code, events = run_app({"PDFOPS_OPERATION": "extract"})
+    @pytest.fixture
+    def crashing_dispatch(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        def fake_dispatch(config: Any, logger: logging.Logger) -> dict[str, Any]:
+            logger.info("operation_started", extra={"operation": config.operation.value})
+            raise RuntimeError("simulated internal bug")
+
+        monkeypatch.setattr(pdf_ops.main, "_dispatch", fake_dispatch)
+
+    def test_unexpected_exception_exits_1_with_traceback(
+        self, crashing_dispatch: None, run_app: RunApp
+    ) -> None:
+        env = {
+            "PDFOPS_OPERATION": "merge",
+            "PDFOPS_INPUTS": "/in/a.pdf",
+            "PDFOPS_OUTPUT": "/out/m.pdf",
+        }
+        code, events = run_app(env)
         assert code == 1
         assert [e["event"] for e in events] == [
             "config_loaded",
             "operation_started",
             "operation_failed",
         ]
-        assert events[0]["operation"] == "extract"
         terminal = events[-1]
         assert terminal["error_code"] == "UNEXPECTED_ERROR"
         assert terminal["exit_code"] == 1
-        assert terminal["exc_type"] == "NotImplementedError"
+        assert terminal["exc_type"] == "RuntimeError"
         assert "traceback" in terminal
 
-    def test_log_level_error_silences_lifecycle_events(self, run_app: RunApp) -> None:
-        env = {"PDFOPS_OPERATION": "extract", "PDFOPS_LOG_LEVEL": "error"}
+    def test_log_level_error_silences_lifecycle_events(
+        self, crashing_dispatch: None, run_app: RunApp
+    ) -> None:
+        env = {
+            "PDFOPS_OPERATION": "merge",
+            "PDFOPS_INPUTS": "/in/a.pdf",
+            "PDFOPS_OUTPUT": "/out/m.pdf",
+            "PDFOPS_LOG_LEVEL": "error",
+        }
         code, events = run_app(env)
         assert code == 1
         assert [e["event"] for e in events] == ["operation_failed"]

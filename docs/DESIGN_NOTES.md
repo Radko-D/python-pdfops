@@ -43,11 +43,11 @@ JSON event.
 
 | Code | Class | Examples (`error_code`) |
 |---|---|---|
-| 0 | success | includes zero-attachments extraction (planned) |
+| 0 | success | includes zero-attachments extraction under the default policy |
 | 1 | unexpected internal error | `UNEXPECTED_ERROR` (bug or unhandled condition; traceback logged) |
-| 2 | invalid configuration | `MISSING_VAR`, `INVALID_OPERATION`, `INVALID_LOG_LEVEL`, `UNKNOWN_VAR`, `INAPPLICABLE_VAR`, `INVALID_INPUTS`, `DUPLICATE_INPUTS` |
-| 3 | input missing/unreadable | `INPUT_MISSING`, `INPUT_IS_DIRECTORY`, `INPUT_UNREADABLE` |
-| 4 | invalid/corrupt PDF | `NOT_A_PDF`, `CORRUPT_PDF` |
+| 2 | invalid configuration | `MISSING_VAR`, `INVALID_OPERATION`, `INVALID_LOG_LEVEL`, `INVALID_FLAG`, `UNKNOWN_VAR`, `INAPPLICABLE_VAR`, `INVALID_INPUTS`, `DUPLICATE_INPUTS` |
+| 3 | input missing/unreadable | `INPUT_MISSING`, `INPUT_IS_DIRECTORY`, `INPUT_UNREADABLE`, `NO_ATTACHMENTS` (opt-in strict flag only) |
+| 4 | invalid/corrupt/unprocessable PDF | `NOT_A_PDF`, `CORRUPT_PDF`, `UNSUPPORTED_PDF_FEATURE` (e.g. a stream filter the build cannot decode) |
 | 5 | password | `PASSWORD_REQUIRED`, `WRONG_PASSWORD`, `UNSUPPORTED_ENCRYPTION` (with password support) |
 | 6 | output | `OUTPUT_EXISTS`, `OUTPUT_DIR_MISSING`, `OUTPUT_NOT_WRITABLE`, `DISK_FULL` |
 
@@ -86,10 +86,11 @@ Stdlib `logging` with a ~40-line formatter - no structlog/OTel dependency, which
 concepts with zero payoff for a run-once batch container.
 
 Event schema: `ts` (ISO-8601 UTC), `level`, `event` (stable machine token: `config_loaded`,
-`operation_started`, `merge_written`, `operation_complete`, `operation_failed`), plus
-event-specific fields (`operation`, `pages`, `bytes_written`, `output_path`, `error_code`,
-`error_message`, `exit_code`, `context`, `exc_type`, `traceback`). The human-readable text
-lives in `error_message`; `event` stays greppable.
+`operation_started`, `merge_written`, `attachment_extracted`, `operation_complete`,
+`operation_failed`, `pdf_library_message`), plus event-specific fields (`operation`,
+`pages`, `bytes_written`, `output_path`, `attachments_extracted`, `attachment`,
+`original_name`, `error_code`, `error_message`, `exit_code`, `context`, `exc_type`,
+`traceback`). The human-readable text lives in `error_message`; `event` stays greppable.
 
 A single error boundary in `main.run()` produces exactly one terminal event per run -
 `operation_complete` or `operation_failed` - so an operator can alert on
@@ -111,8 +112,9 @@ layer together with password support.
 
 ## 5. Engine seam (per [D-002](DECISIONS.md#D-002), [D-011](DECISIONS.md#D-011))
 
-`engine.py` defines the Protocol (currently just `merge(inputs, destination) -> MergeStats`)
-and the `get_engine()` factory - the single swap point. `engine_pypdf.py` is the only module
+`engine.py` defines the Protocol (`merge(inputs, destination) -> MergeStats` and
+`list_attachments(source) -> list[Attachment]`) and the `get_engine()` factory - the single
+swap point. `engine_pypdf.py` is the only module
 that imports pypdf and translates its failure modes into the application taxonomy. Readers
 are opened - and their page trees forced - **before** the writer produces a single byte, so
 a corrupt later input aborts the run before any output work.
@@ -154,3 +156,42 @@ This invariant is what any retry/overwrite policy can safely build on. An existi
 is refused (`OUTPUT_EXISTS`) until the configurable overwrite/skip policy lands with the
 retry-semantics work; a missing output directory is refused rather than created - output
 locations are mounts, and a missing mount is a workflow bug worth failing loudly on.
+
+## 7. Extract and attachment-name security (per [D-014](DECISIONS.md#D-014), [D-015](DECISIONS.md#D-015), [D-016](DECISIONS.md#D-016))
+
+Extraction's dominant risk is not parsing - it's that **attachment names are
+attacker-controlled strings written to a mounted filesystem**. A name like `../../evil.txt`
+or `/etc/passwd` would otherwise turn extract into a write-anywhere primitive on whatever
+the operator mounted.
+
+**Sanitize-always ([D-014](DECISIONS.md#D-014)):** every name passes through a pure
+`sanitize_attachment_name` function - normalize both separator conventions (names written
+on Windows carry backslashes), take the basename, strip control characters, cap the byte
+length under filesystem NAME_MAX, deterministic `attachment_<n>` fallback when nothing safe
+remains. Rejecting whole PDFs for hostile names was considered and dropped: it would break
+legitimate extraction, and renaming is lossless (the original name is logged whenever it
+changed). Because the function is pure, the whole security behavior is one table-driven
+test suite. Defense in depth: the resolved parent of every write target is re-checked to be
+the output directory, and a pre-existing symlink at a target name counts as a conflict.
+
+**Semantics ([D-015](DECISIONS.md#D-015)):** duplicate names - which the PDF name tree
+permits and real PDFs contain - get deterministic `-1`/`-2` suffixes in name-tree order
+(also the extraction order, deterministic across runs). Collisions are detected on
+**casefolded** names: the output volume may be case-insensitive (macOS, SMB mounts),
+where `Report.txt` and `report.txt` are one file - a naive case-sensitive plan would
+silently overwrite the first payload there while reporting both as extracted. Suffixing
+on the casefolded key keeps every payload on every filesystem and keeps the plan
+byte-identical across platforms. Zero attachments is a success with
+`attachments_extracted=0` - it's data-dependent, so the workflow gates on the count -
+with `PDFOPS_FAIL_ON_NO_ATTACHMENTS=true` flipping it to exit 3 / `NO_ATTACHMENTS` for
+pipelines where an attachment-less input means something upstream broke. Any pre-existing
+file at a target name fails the whole run before a single byte is written (all-or-nothing
+conflict check); each file is then written via the same atomic temp-and-rename path as
+merge. Known limitation: the *set* of files is not transactional - a mid-run crash leaves
+a partial set of individually-complete files; a staging-directory handoff is the noted
+future fix if a downstream consumer needs all-or-nothing.
+
+**Scope ([D-016](DECISIONS.md#D-016)):** document-level `/Names/EmbeddedFiles` only.
+Page-level `/FileAttachment` annotations are a distinct, rarer mechanism (sticky-note
+attachments); pypdf's `attachment_list` does not surface them. Documented as a limitation
+rather than half-supported.

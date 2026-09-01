@@ -78,15 +78,38 @@ def test_invalid_config_exits_2_with_json_only_stdout(image: str) -> None:
     assert events[-1]["error_code"] == "INVALID_OPERATION"
 
 
-def test_unimplemented_operation_exits_1(image: str) -> None:
-    result = docker_run(image, {"PDFOPS_OPERATION": "extract"})
-    assert result.returncode == 1  # extract is not implemented yet
+def test_golden_extract_via_mounted_volumes(image: str, mount_dir: Path) -> None:
+    in_dir = mount_dir / "in"
+    out_dir = mount_dir / "out"
+    in_dir.mkdir()
+    out_dir.mkdir()
+    out_dir.chmod(0o777)
+
+    writer = PdfWriter()
+    writer.add_blank_page(width=200, height=300)
+    writer.add_attachment("data.csv", b"a,b\n1,2\n")
+    writer.add_attachment("../../evil.txt", b"traverse")
+    with (in_dir / "carrier.pdf").open("wb") as handle:
+        writer.write(handle)
+
+    result = docker_run(
+        image,
+        {
+            "PDFOPS_OPERATION": "extract",
+            "PDFOPS_INPUT": "/in/carrier.pdf",
+            "PDFOPS_OUTPUT_DIR": "/out",
+        },
+        volumes={in_dir: "/in:ro", out_dir: "/out"},
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
     events = [json.loads(line) for line in result.stdout.strip().splitlines()]
-    assert [e["event"] for e in events] == [
-        "config_loaded",
-        "operation_started",
-        "operation_failed",
-    ]
+    assert events[-1]["event"] == "operation_complete"
+    assert events[-1]["attachments_extracted"] == 2
+    # sanitized names only, nothing outside the mounted output dir
+    assert sorted(p.name for p in out_dir.iterdir()) == ["data.csv", "evil.txt"]
+    assert (out_dir / "data.csv").read_bytes() == b"a,b\n1,2\n"
+    assert not (mount_dir / "evil.txt").exists()
 
 
 def test_runs_as_non_root_uid_10001(image: str) -> None:

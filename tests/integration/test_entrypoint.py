@@ -46,13 +46,9 @@ def test_merge_without_inputs_exits_2() -> None:
     assert events[-1]["error_code"] == "MISSING_VAR"
 
 
-def test_unimplemented_operation_exits_1() -> None:
+def test_extract_without_required_vars_exits_2() -> None:
     result = run_module({"PDFOPS_OPERATION": "extract"})
-    assert result.returncode == 1
+    assert result.returncode == 2
     assert result.stderr == ""
     events = [json.loads(line) for line in result.stdout.strip().splitlines()]
-    assert [e["event"] for e in events] == [
-        "config_loaded",
-        "operation_started",
-        "operation_failed",
-    ]
+    assert events[-1]["error_code"] == "MISSING_VAR"

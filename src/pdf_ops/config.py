@@ -25,11 +25,27 @@ VAR_OPERATION = "PDFOPS_OPERATION"
 VAR_LOG_LEVEL = "PDFOPS_LOG_LEVEL"
 VAR_INPUTS = "PDFOPS_INPUTS"
 VAR_OUTPUT = "PDFOPS_OUTPUT"
+VAR_INPUT = "PDFOPS_INPUT"
+VAR_OUTPUT_DIR = "PDFOPS_OUTPUT_DIR"
+VAR_FAIL_ON_NO_ATTACHMENTS = "PDFOPS_FAIL_ON_NO_ATTACHMENTS"
 
 # Every variable the application understands. Any other PDFOPS_-prefixed
 # variable is rejected as a probable typo (a silently ignored misspelling like
 # PDFOPS_INPUTS_ would otherwise surface as a confusing downstream error).
-KNOWN_VARS = frozenset({VAR_OPERATION, VAR_LOG_LEVEL, VAR_INPUTS, VAR_OUTPUT})
+KNOWN_VARS = frozenset(
+    {
+        VAR_OPERATION,
+        VAR_LOG_LEVEL,
+        VAR_INPUTS,
+        VAR_OUTPUT,
+        VAR_INPUT,
+        VAR_OUTPUT_DIR,
+        VAR_FAIL_ON_NO_ATTACHMENTS,
+    }
+)
+
+MERGE_ONLY_VARS = frozenset({VAR_INPUTS, VAR_OUTPUT})
+EXTRACT_ONLY_VARS = frozenset({VAR_INPUT, VAR_OUTPUT_DIR, VAR_FAIL_ON_NO_ATTACHMENTS})
 
 # The list separator for PDFOPS_INPUTS: os.pathsep (":" on POSIX), the same
 # convention as PATH. Colons in mounted file paths are effectively unheard of;
@@ -62,6 +78,9 @@ class MergeConfig:
 class ExtractConfig:
     operation: ClassVar[Literal[Operation.EXTRACT]] = Operation.EXTRACT
     log_level: int
+    input: Path
+    output_dir: Path
+    fail_on_no_attachments: bool
 
 
 type Config = MergeConfig | ExtractConfig
@@ -78,14 +97,22 @@ def parse_config(env: Mapping[str, str]) -> Config:
     log_level = _parse_log_level(env)
     match operation:
         case Operation.MERGE:
+            _reject_inapplicable_vars(env, operation, EXTRACT_ONLY_VARS)
             return MergeConfig(
                 log_level=log_level,
                 inputs=_parse_inputs(env),
                 output=_parse_output(env),
             )
         case Operation.EXTRACT:
-            _reject_inapplicable_vars(env, operation, {VAR_INPUTS, VAR_OUTPUT})
-            return ExtractConfig(log_level=log_level)
+            _reject_inapplicable_vars(env, operation, MERGE_ONLY_VARS)
+            return ExtractConfig(
+                log_level=log_level,
+                input=_parse_single_path(env, VAR_INPUT, "the PDF to extract from"),
+                output_dir=_parse_single_path(
+                    env, VAR_OUTPUT_DIR, "the directory receiving the attachments"
+                ),
+                fail_on_no_attachments=_parse_flag(env, VAR_FAIL_ON_NO_ATTACHMENTS),
+            )
 
 
 def _reject_unknown_vars(env: Mapping[str, str]) -> None:
@@ -190,3 +217,28 @@ def _parse_output(env: Mapping[str, str]) -> Path:
             context={"var": VAR_OUTPUT},
         )
     return Path(raw)
+
+
+def _parse_single_path(env: Mapping[str, str], var: str, purpose: str) -> Path:
+    raw = env.get(var, "").strip()
+    if not raw:
+        raise ConfigError(
+            f"{var} is required for extract ({purpose})",
+            error_code="MISSING_VAR",
+            context={"var": var},
+        )
+    return Path(raw)
+
+
+def _parse_flag(env: Mapping[str, str], var: str, *, default: bool = False) -> bool:
+    raw = env.get(var, "").strip()
+    if not raw:
+        return default
+    normalized = raw.lower()
+    if normalized in ("true", "false"):
+        return normalized == "true"
+    raise ConfigError(
+        f"{var} has invalid value {raw!r} (accepted values: true, false, case-insensitive)",
+        error_code="INVALID_FLAG",
+        context={"var": var, "value": raw},
+    )
