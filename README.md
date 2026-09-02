@@ -106,6 +106,9 @@ repeated path is almost always a templating bug that would silently duplicate co
 - Output is written **atomically**: work goes to a temp file in the output directory,
   then a single rename. The final path either holds a complete PDF or nothing - a
   failed or killed run never leaves a partial file where a downstream step could read it.
+  Outputs get regular `open()`-style permissions (the container umask, `0644` by
+  default), so a later step running as a different user can read them from a shared
+  volume.
 - **Existing outputs** follow `PDFOPS_ON_EXISTS`: `fail` (default) refuses with exit 6;
   `overwrite` replaces atomically (readers see old bytes or new bytes, never a mix);
   `skip` treats the existing output as a completed prior run. For merge, `skip` is a

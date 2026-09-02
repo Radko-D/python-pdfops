@@ -2,7 +2,7 @@
 
 > **Project:** Containerized PDF operations (merge, extract attachments) for workflow systems
 > **Started:** 2026-08-31
-> **Last updated:** 2026-09-01
+> **Last updated:** 2026-09-02
 
 This document is the authoritative register of all architectural decisions for this project. New decisions are appended with the next available `D-###`. See [DECISION_TRACKING_STANDARD.md](DECISION_TRACKING_STANDARD.md) for format, vocabularies, and workflow. CI validation: [`scripts/validate_decisions.py`](scripts/validate_decisions.py).
 
@@ -33,8 +33,9 @@ This document is the authoritative register of all architectural decisions for t
 | [`D-019`](#D-019) | 🟢 | security | Output encryption: never|inherit|always tri-state, AES-256, explicit-password fallback | 2026-09-01 | PDFOPS_OUTPUT_ENCRYPTION: never (default; plaintext output with a loud security_downgrade warning when inputs were encrypted), inherit (encrypt iff any input was encrypted - confidentiality never decreases), always. Output password from its own channel pair, falling back only to an explicitly supplied input password - never the empty auto-try (MISSING_OUTPUT_PASSWORD instead). Output always AES-256 regardless of input schemes; an output password with mode never is a hard error. | [`DESIGN_NOTES.md section 8`](DESIGN_NOTES.md) | - |
 | [`D-020`](#D-020) | 🟢 | error-handling | Retryability contract: exit codes stay 0-6, retry guidance is documentation | 2026-09-01 | No 10+ transient exit-code band: the 0-6 map is a published API and nearly every failure class is deterministic, so retryability lives in the README - a per-code table (exit 1 the only default-retryable, DISK_FULL the judgment call) and an Argo retryStrategy.expression snippet, paired with PDFOPS_ON_EXISTS=skip for at-least-once safety. | [`DESIGN_NOTES.md section 9`](DESIGN_NOTES.md) | - |
 | [`D-021`](#D-021) | 🟢 | reliability | PDFOPS_ON_EXISTS tri-state: merge whole-run skip, extract per-file completion | 2026-09-01 | fail (default) refuses; overwrite replaces atomically; skip treats existing output as completed prior work - merge short-circuits without reading inputs, extract writes only missing attachments (sound because every written file is atomic and therefore whole). Stale temp debris matching the run's own targets is removed at startup under a documented single-writer-per-output assumption. | [`DESIGN_NOTES.md section 9`](DESIGN_NOTES.md) | - |
+| [`D-022`](#D-022) | 🟢 | reliability | Output files honor the process umask, not mkstemp's 0600 | 2026-09-02 | atomic_output re-chmods its temp file to 0666 & ~umask at creation: mkstemp's private 0600 would ride through os.replace onto the published output, leaving it unreadable by a downstream step running as a different UID on a shared volume. Invisible under Docker Desktop's ownership-mapping mounts, real on native Linux bind mounts - caught by CI on the first Linux-host run. | [`DESIGN_NOTES.md section 6`](DESIGN_NOTES.md) | - |
 
-**Counts:** 21 total decisions - 16 🟢 decided, 0 🟡 pending, 3 ⏸ deferred, 2 🔵 superseded.
+**Counts:** 22 total decisions - 17 🟢 decided, 0 🟡 pending, 3 ⏸ deferred, 2 🔵 superseded.
 
 ### Index by area
 
@@ -46,10 +47,10 @@ This document is the authoritative register of all architectural decisions for t
 | config | 4 | D-004, D-007, D-008, D-009 |
 | pdf-engine | 4 | D-002, D-011, D-016, D-018 |
 | security | 4 | D-013, D-014, D-017, D-019 |
-| reliability | 2 | D-010, D-021 |
+| reliability | 3 | D-010, D-021, D-022 |
 | observability | 1 | D-005 |
 | project | 1 | D-001 |
-| **Total** | **21** | |
+| **Total** | **22** | |
 
 ### Open decisions (🟡 Pending + ⏸ Deferred)
 
@@ -187,6 +188,7 @@ Per-decision details: status, decided date, rationale, related decisions, and th
 - **Summary:** All output goes to a temp file in the destination directory (same filesystem), is fsynced, and is renamed over the final path in one step; the final path holds a complete PDF or nothing. Existing output refused (OUTPUT_EXISTS) until the overwrite/skip policy lands; missing output dir refused, never auto-created.
 - **Risk:** medium
 - **Reversibility:** cheap
+- **Amended by:** [D-022](#D-022) (temp-file mode: published outputs honor the umask instead of inheriting mkstemp's 0600)
 - **Where:** [`DESIGN_NOTES.md section 6`](DESIGN_NOTES.md)
 
 <a id="D-011"></a>
@@ -314,6 +316,18 @@ Per-decision details: status, decided date, rationale, related decisions, and th
 - **Reversibility:** cheap
 - **Amends:** [D-015](#D-015)
 - **Where:** [`DESIGN_NOTES.md section 9`](DESIGN_NOTES.md)
+
+<a id="D-022"></a>
+### D-022
+- **Title:** Output files honor the process umask, not mkstemp's 0600
+- **Status:** 🟢 Decided
+- **Area:** reliability
+- **Decided on:** 2026-09-02
+- **Summary:** atomic_output re-chmods its temp file to 0666 & ~umask at creation: mkstemp's private 0600 would ride through os.replace onto the published output, leaving it unreadable by a downstream step running as a different UID on a shared volume. Invisible under Docker Desktop's ownership-mapping mounts, real on native Linux bind mounts - caught by CI on the first Linux-host run.
+- **Risk:** low
+- **Reversibility:** cheap
+- **Amends:** [D-010](#D-010)
+- **Where:** [`DESIGN_NOTES.md section 6`](DESIGN_NOTES.md)
 
 ---
 

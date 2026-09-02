@@ -186,6 +186,20 @@ class TestAtomicity:
         assert not output.exists()
         assert list(out_dir.iterdir()) == [], "no partial or temp files may remain"
 
+    def test_output_mode_honors_umask_not_mkstemp_0600(
+        self, make_pdf: Callable[..., Path], out_dir: Path, run_app: RunApp
+    ) -> None:
+        # mkstemp creates the temp 0600 and the rename would carry that onto
+        # the published output - unreadable by a downstream step running as a
+        # different UID on a shared volume. The output must get what a plain
+        # open() would under the current umask.
+        source = make_pdf()
+        output = out_dir / "m.pdf"
+        assert run_app(merge_env([source], output))[0] == 0
+        umask = os.umask(0)
+        os.umask(umask)
+        assert output.stat().st_mode & 0o777 == 0o666 & ~umask
+
 
 class TestOutputPolicy:
     def test_existing_output_refused(

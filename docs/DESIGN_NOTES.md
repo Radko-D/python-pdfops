@@ -165,6 +165,15 @@ follow the `PDFOPS_ON_EXISTS` policy (section 9); a missing output directory is 
 than created - output locations are mounts, and a missing mount is a workflow bug worth
 failing loudly on.
 
+One subtlety CI caught on its first native-Linux Docker host
+([D-022](DECISIONS.md#D-022), amending [D-010](DECISIONS.md#D-010)): `mkstemp` creates
+the temp file `0600` (private by design) and `os.replace` carries that mode onto the
+final path - so published outputs were readable only by the container UID. Docker
+Desktop's ownership-mapping file sharing hides this on macOS; a real bind mount or
+cluster volume does not, and a downstream step running as a different UID cannot read
+the result. The temp is therefore re-chmodded at creation to what a plain `open()`
+would produce under the process umask.
+
 ## 7. Extract and attachment-name security (per [D-014](DECISIONS.md#D-014), [D-015](DECISIONS.md#D-015), [D-016](DECISIONS.md#D-016))
 
 Extraction's dominant risk is not parsing - it's that **attachment names are

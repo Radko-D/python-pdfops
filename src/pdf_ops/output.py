@@ -114,6 +114,14 @@ def atomic_output(path: Path) -> Generator[Path]:
         fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
     except OSError as err:
         _raise_translated(err, path)
+    # mkstemp creates 0600 (private by design) and os.replace carries that
+    # mode onto the final path - where a downstream workflow step, typically
+    # running as a different UID on a shared volume, could not read it.
+    # Outputs are ordinary files: give them what plain open() would,
+    # honoring the process umask.
+    umask = os.umask(0)
+    os.umask(umask)
+    os.fchmod(fd, 0o666 & ~umask)
     os.close(fd)
     tmp_path = Path(tmp_name)
     try:
