@@ -1,7 +1,7 @@
 # Design Notes - pdf-ops
 
 > Working notes behind the entries in [`DECISIONS.md`](DECISIONS.md). These sections accumulate
-> as the project iterates and are distilled into the final 1-2 page `DESIGN.md` deliverable.
+> as the project iterates and are distilled into [`DESIGN.md`](DESIGN.md).
 
 ---
 

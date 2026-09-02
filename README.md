@@ -4,8 +4,9 @@ Containerized PDF operations for workflow systems (e.g. Argo Workflows): exactly
 operation per container run - **merge** multiple PDFs into one, or **extract** the
 attachments embedded in a PDF - configured entirely through environment variables.
 
-Design rationale and tradeoffs are documented in
-[`docs/DESIGN_NOTES.md`](docs/DESIGN_NOTES.md); individual choices, with their
+The design - architecture, library tradeoffs, security posture, limitations - is
+summarized in [`docs/DESIGN.md`](docs/DESIGN.md); the working notes behind it are
+[`docs/DESIGN_NOTES.md`](docs/DESIGN_NOTES.md), and individual choices, with their
 alternatives and status, live in the decision register at
 [`docs/DECISIONS.md`](docs/DECISIONS.md).
 
