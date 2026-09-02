@@ -4,10 +4,10 @@ Containerized PDF operations for workflow systems (e.g. Argo Workflows): exactly
 operation per container run - **merge** multiple PDFs into one, or **extract** the
 attachments embedded in a PDF - configured entirely through environment variables.
 
-> **Status: work in progress.** Both operations, password support, and retry semantics
-> are implemented; container hardening is next. See
-> [`docs/DECISIONS.md`](docs/DECISIONS.md) for the decision register and
-> [`docs/DESIGN_NOTES.md`](docs/DESIGN_NOTES.md) for design notes.
+Design rationale and tradeoffs are documented in
+[`docs/DESIGN_NOTES.md`](docs/DESIGN_NOTES.md); individual choices, with their
+alternatives and status, live in the decision register at
+[`docs/DECISIONS.md`](docs/DECISIONS.md).
 
 ## Quick start
 
@@ -142,10 +142,21 @@ repeated path is almost always a templating bug that would silently duplicate co
 | 5 | password required/wrong/unsupported |
 | 6 | output conflict or output location unusable |
 
-Every run ends with exactly one terminal JSON event on stdout - `operation_complete`
-(merge: `pages`, `bytes_written`, `output_path`; extract: `attachments_extracted`,
-`bytes_written`) or `operation_failed` (with `error_code`, `error_message`,
-`exit_code`). Terminal events are never suppressed by `PDFOPS_LOG_LEVEL`.
+## Logging
+
+Output is JSON lines on stdout - one event per line, stderr stays empty. Lifecycle
+events (`config_loaded`, `input_opened`, `merge_written`, `stale_temp_removed`, ...)
+narrate progress and respect `PDFOPS_LOG_LEVEL`; the config echo reports passwords as
+presence only (`unset` / `set(env)` / `set(file)`), never as values. Every run ends
+with exactly one terminal event - `operation_complete` (merge: `pages`,
+`bytes_written`, `output_path`; extract: `attachments_extracted`, `bytes_written`) or
+`operation_failed` (with `error_code`, `error_message`, `exit_code`) - which
+`PDFOPS_LOG_LEVEL` never suppresses, so a workflow engine can always branch on the
+last line:
+
+```json
+{"ts": "2026-09-02T17:55:15.661+00:00", "level": "info", "event": "operation_complete", "operation": "merge", "exit_code": 0, "duration_s": 0.001, "inputs_merged": 2, "pages": 3, "bytes_written": 728, "output_path": "/out/merged.pdf", "output_encrypted": false}
+```
 
 ## Retries
 
