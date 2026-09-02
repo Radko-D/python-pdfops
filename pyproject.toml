@@ -3,6 +3,8 @@ name = "pdf-ops"
 version = "0.1.0"
 description = "Containerized PDF operations (merge, extract attachments) for workflow systems"
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [
     { email = "29573973+Radko-D@users.noreply.github.com" }
 ]

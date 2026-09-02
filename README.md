@@ -1,5 +1,8 @@
 # pdf-ops
 
+[![CI](https://github.com/Radko-D/python-pdfops/actions/workflows/ci.yml/badge.svg)](https://github.com/Radko-D/python-pdfops/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 Containerized PDF operations for workflow systems (e.g. Argo Workflows): exactly one
 operation per container run - **merge** multiple PDFs into one, or **extract** the
 attachments embedded in a PDF - configured entirely through environment variables.
