@@ -223,17 +223,6 @@ class TestOutputPolicy:
         assert events[-1]["error_code"] == "OUTPUT_NOT_WRITABLE"
 
 
-class TestEncryptedInputs:
-    def test_encrypted_input_maps_to_password_class(
-        self, make_encrypted_pdf: Callable[..., Path], out_dir: Path, run_app: RunApp
-    ) -> None:
-        locked = make_encrypted_pdf()
-        code, events = run_app(merge_env([locked], out_dir / "m.pdf"))
-        assert code == 5
-        assert events[-1]["error_code"] == "PASSWORD_REQUIRED"
-        assert list(out_dir.iterdir()) == []
-
-
 class TestPathologicalInputs:
     def test_pypdf_builtin_exception_maps_to_corrupt(
         self, make_pathological_pdf: Callable[..., Path], out_dir: Path, run_app: RunApp

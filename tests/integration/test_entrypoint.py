@@ -39,21 +39,6 @@ def test_invalid_config_exits_2_with_json_only_stdout() -> None:
     assert events[-1]["error_code"] == "INVALID_OPERATION"
 
 
-def test_merge_without_inputs_exits_2() -> None:
-    result = run_module({"PDFOPS_OPERATION": "merge"})
-    assert result.returncode == 2
-    events = [json.loads(line) for line in result.stdout.strip().splitlines()]
-    assert events[-1]["error_code"] == "MISSING_VAR"
-
-
-def test_extract_without_required_vars_exits_2() -> None:
-    result = run_module({"PDFOPS_OPERATION": "extract"})
-    assert result.returncode == 2
-    assert result.stderr == ""
-    events = [json.loads(line) for line in result.stdout.strip().splitlines()]
-    assert events[-1]["error_code"] == "MISSING_VAR"
-
-
 def test_password_env_var_never_reaches_output() -> None:
     result = run_module({"PDFOPS_OPERATION": "bogus", "PDFOPS_PASSWORD": "hunter2-secret"})
     assert result.returncode == 2

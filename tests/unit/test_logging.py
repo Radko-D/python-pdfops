@@ -7,7 +7,12 @@ import logging
 
 import pytest
 
-from pdf_ops.logging_setup import JsonFormatter, emit_terminal, setup_logging
+from pdf_ops.logging_setup import (
+    JsonFormatter,
+    _ThirdPartyEventFilter,  # pyright: ignore[reportPrivateUsage]
+    emit_terminal,
+    setup_logging,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -117,3 +122,36 @@ class TestEmitTerminal:
         payload = json.loads(capsys.readouterr().out.strip())
         assert payload["exc_type"] == "RuntimeError"
         assert "kaboom" in payload["traceback"]
+
+
+class TestThirdPartyEventFilter:
+    def pypdf_record(self, message: str) -> logging.LogRecord:
+        return logging.LogRecord(
+            name="pypdf",
+            level=logging.WARNING,
+            pathname=__file__,
+            lineno=1,
+            msg=message,
+            args=None,
+            exc_info=None,
+        )
+
+    def test_saslprep_codepoints_are_masked(self) -> None:
+        # pypdf's SASLprep warning names the exact codepoint of a password
+        # character. Config-level rejection of control characters makes this
+        # path unreachable today; the mask stays as defense in depth and is
+        # pinned here directly.
+        record = self.pypdf_record("stripping non-SASLprep character U+0301 from password")
+        assert _ThirdPartyEventFilter().filter(record) is True
+        payload = json.loads(JsonFormatter().format(record))
+        assert payload["event"] == "pdf_library_message"
+        assert payload["source"] == "pypdf"
+        assert "U+0301" not in json.dumps(payload)
+        assert "U+****" in str(payload["detail"])
+
+    def test_non_saslprep_message_passes_through_verbatim(self) -> None:
+        record = self.pypdf_record("Object 9 0 not defined.")
+        assert _ThirdPartyEventFilter().filter(record) is True
+        payload = json.loads(JsonFormatter().format(record))
+        assert payload["event"] == "pdf_library_message"
+        assert payload["detail"] == "Object 9 0 not defined."

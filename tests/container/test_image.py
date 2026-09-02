@@ -134,15 +134,13 @@ def test_golden_merge_via_mounted_volumes(image: str, mount_dir: Path) -> None:
         with (in_dir / name).open("wb") as handle:
             writer.write(handle)
 
-    result = docker_run(
-        image,
-        {
-            "PDFOPS_OPERATION": "merge",
-            "PDFOPS_INPUTS": "/in/a.pdf:/in/b.pdf",
-            "PDFOPS_OUTPUT": "/out/merged.pdf",
-        },
-        volumes={in_dir: "/in:ro", out_dir: "/out"},
-    )
+    env = {
+        "PDFOPS_OPERATION": "merge",
+        "PDFOPS_INPUTS": "/in/a.pdf:/in/b.pdf",
+        "PDFOPS_OUTPUT": "/out/merged.pdf",
+    }
+    volumes = {in_dir: "/in:ro", out_dir: "/out"}
+    result = docker_run(image, env, volumes=volumes)
 
     assert result.returncode == 0, result.stdout + result.stderr
     events = [json.loads(line) for line in result.stdout.strip().splitlines()]
@@ -153,6 +151,15 @@ def test_golden_merge_via_mounted_volumes(image: str, mount_dir: Path) -> None:
     merged = out_dir / "merged.pdf"
     assert merged.exists()
     assert len(PdfReader(merged).pages) == 3
+
+    # A retried step under the skip policy is a no-op: exit 0, skipped
+    # flagged, the existing output byte-identical.
+    original = merged.read_bytes()
+    retry = docker_run(image, env | {"PDFOPS_ON_EXISTS": "skip"}, volumes=volumes)
+    assert retry.returncode == 0, retry.stdout + retry.stderr
+    retry_events = [json.loads(line) for line in retry.stdout.strip().splitlines()]
+    assert retry_events[-1]["skipped"] is True
+    assert merged.read_bytes() == original
 
 
 def test_golden_encrypted_merge_with_mounted_password_file(image: str, mount_dir: Path) -> None:
@@ -196,34 +203,3 @@ def test_golden_encrypted_merge_with_mounted_password_file(image: str, mount_dir
 
     encrypt_dict = cast("Any", reader.trailer["/Encrypt"]).get_object()
     assert int(encrypt_dict["/V"]) == 5  # AES-256, not legacy RC4
-
-
-def test_skip_makes_a_retry_a_no_op(image: str, mount_dir: Path) -> None:
-    in_dir = mount_dir / "in"
-    out_dir = mount_dir / "out"
-    in_dir.mkdir()
-    out_dir.mkdir()
-    out_dir.chmod(0o777)
-
-    writer = PdfWriter()
-    writer.add_blank_page(width=200, height=300)
-    with (in_dir / "a.pdf").open("wb") as handle:
-        writer.write(handle)
-
-    env = {
-        "PDFOPS_OPERATION": "merge",
-        "PDFOPS_INPUTS": "/in/a.pdf",
-        "PDFOPS_OUTPUT": "/out/merged.pdf",
-        "PDFOPS_ON_EXISTS": "skip",
-    }
-    volumes = {in_dir: "/in:ro", out_dir: "/out"}
-
-    first = docker_run(image, env, volumes=volumes)
-    assert first.returncode == 0, first.stdout + first.stderr
-    original = (out_dir / "merged.pdf").read_bytes()
-
-    second = docker_run(image, env, volumes=volumes)
-    assert second.returncode == 0, second.stdout + second.stderr
-    events = [json.loads(line) for line in second.stdout.strip().splitlines()]
-    assert events[-1]["skipped"] is True
-    assert (out_dir / "merged.pdf").read_bytes() == original

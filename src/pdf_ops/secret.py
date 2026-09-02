@@ -26,9 +26,3 @@ class Secret:
 
     def __bool__(self) -> bool:
         return bool(self._value)
-
-    def __eq__(self, other: object) -> bool:
-        return isinstance(other, Secret) and other._value == self._value
-
-    def __hash__(self) -> int:
-        return hash(self._value)

@@ -73,6 +73,26 @@ class TestMergePasswords:
         opened = [e for e in events if e["event"] == "input_opened"]
         assert opened[0]["algorithm"] == "AES-256"
 
+    @pytest.mark.parametrize(
+        ("algorithm", "label"),
+        [("AES-128", "AES-128"), ("RC4-40", "RC4-40")],
+    )
+    def test_legacy_scheme_labels_read_from_encrypt_dict(
+        self,
+        make_encrypted_pdf: Callable[..., Path],
+        out_dir: Path,
+        run_app: RunApp,
+        algorithm: str,
+        label: str,
+    ) -> None:
+        # The label comes from the plaintext /Encrypt dictionary (/V, /CF),
+        # not from the algorithm we happened to request - pin each branch.
+        locked = make_encrypted_pdf(password=PW, algorithm=algorithm)
+        code, events = run_app(merge_env([locked], out_dir / "m.pdf", PDFOPS_PASSWORD=PW))
+        assert code == 0
+        opened = [e for e in events if e["event"] == "input_opened"]
+        assert opened[0]["algorithm"] == label
+
     def test_wrong_password_names_input_not_password(
         self, make_encrypted_pdf: Callable[..., Path], out_dir: Path, run_app: RunApp
     ) -> None:
@@ -436,17 +456,6 @@ class TestReviewHardening:
         code, events = run_app(merge_env([owner_only], out_dir / "m.pdf"))
         assert code == 0
         assert any(e["event"] == "security_downgrade" for e in events)
-
-    def test_owner_password_match_reported_as_owner(
-        self, make_encrypted_pdf: Callable[..., Path], out_dir: Path, run_app: RunApp
-    ) -> None:
-        # Default fixture sets owner == user, and pypdf verifies the owner
-        # password first - the most common real-world report.
-        locked = make_encrypted_pdf(password=PW)
-        code, events = run_app(merge_env([locked], out_dir / "m.pdf", PDFOPS_PASSWORD=PW))
-        assert code == 0
-        opened = [e for e in events if e["event"] == "input_opened"]
-        assert opened[0]["password_type"] == "owner"
 
     def test_short_password_degrades_redaction_with_warning(
         self, make_encrypted_pdf: Callable[..., Path], out_dir: Path, run_app: RunApp

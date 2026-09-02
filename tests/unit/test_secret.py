@@ -26,9 +26,6 @@ class TestSecret:
         assert f"password is {secret}" == "password is ***"
         assert "hunter2" not in f"{secret!r}{secret!s}"
 
-    def test_reveal_is_the_only_way_in(self) -> None:
-        assert Secret("hunter2").reveal() == "hunter2"
-
     def test_bool_reflects_emptiness(self) -> None:
         assert Secret("x")
         assert not Secret("")

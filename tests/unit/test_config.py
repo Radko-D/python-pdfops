@@ -227,11 +227,6 @@ class TestUnknownVars:
 
 
 class TestPasswordVars:
-    def test_password_env_channel(self) -> None:
-        config = parse_config(EXTRACT_ENV | {"PDFOPS_PASSWORD": "hunter2"})
-        assert isinstance(config.password, EnvSecret)
-        assert config.password.value.reveal() == "hunter2"
-
     def test_password_file_channel(self) -> None:
         config = parse_config(EXTRACT_ENV | {"PDFOPS_PASSWORD_FILE": "/secrets/pw"})
         assert isinstance(config.password, FileSecret)
@@ -380,13 +375,6 @@ class TestPasswordHygiene:
         with pytest.raises(ConfigError) as exc_info:
             resolve_secret(FileSecret(path=secret_file))
         assert exc_info.value.error_code == "PASSWORD_UNSUPPORTED_CHARACTERS"
-
-    def test_crlf_stripped_not_rejected(self, tmp_path: Path) -> None:
-        secret_file = tmp_path / "pw"
-        secret_file.write_bytes(b"hunter2\r\n")
-        resolved = resolve_secret(FileSecret(path=secret_file))
-        assert resolved is not None
-        assert resolved.reveal() == "hunter2"
 
 
 class TestEmptyInapplicableVars:

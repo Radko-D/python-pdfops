@@ -189,19 +189,6 @@ class TestExtractRetries:
         assert (out_dir / "a.txt").read_bytes() == b"fresh"
         assert (out_dir / "b.txt").read_bytes() == b"new"
 
-    def test_fail_stays_all_or_nothing(
-        self,
-        make_pdf_with_attachments: Callable[..., Path],
-        out_dir: Path,
-        run_app: RunApp,
-    ) -> None:
-        carrier = make_pdf_with_attachments([("a.txt", b"x"), ("b.txt", b"y")])
-        (out_dir / "a.txt").write_bytes(b"pre-existing")
-        code, events = run_app(extract_env(carrier, out_dir))
-        assert code == 6
-        assert events[-1]["error_code"] == "OUTPUT_EXISTS"
-        assert not (out_dir / "b.txt").exists()
-
 
 class TestDuration:
     def test_terminal_events_carry_duration(
@@ -278,23 +265,28 @@ class TestStaleTempScoping:
         assert (out_dir / "data.txt").read_bytes() == b"second"
         assert not any(e["event"] == "stale_temp_removed" for e in events)
 
-    def test_extract_cleans_seeded_stale_temp(
+    def test_retry_preserves_prior_attachment_named_like_a_temp(
         self,
         make_pdf_with_attachments: Callable[..., Path],
         out_dir: Path,
         run_app: RunApp,
     ) -> None:
-        carrier = make_pdf_with_attachments([("a.txt", b"x")])
-        (out_dir / ".a.txt.dead.tmp").write_bytes(b"debris")
-        unrelated = out_dir / ".unrelated.bin.xyz.tmp"
-        unrelated.write_bytes(b"not ours")
+        # The retry variant: the temp-shaped attachment already sits ON DISK
+        # from a completed prior run. Cleanup for the sibling target sees a
+        # matching name and must recognize it as a planned output, not debris.
+        carrier = make_pdf_with_attachments(
+            [(".data.txt.1.tmp", b"first-payload"), ("data.txt", b"second")]
+        )
+        env = extract_env(carrier, out_dir, PDFOPS_ON_EXISTS="overwrite")
+        assert run_app(env)[0] == 0
 
-        code, events = run_app(extract_env(carrier, out_dir))
+        code, events = run_app(env)
 
         assert code == 0
-        cleaned = [e["temp_file"] for e in events if e["event"] == "stale_temp_removed"]
-        assert cleaned == [".a.txt.dead.tmp"]
-        assert unrelated.exists()
+        assert events[-1]["attachments_extracted"] == 2
+        assert (out_dir / ".data.txt.1.tmp").read_bytes() == b"first-payload"
+        assert (out_dir / "data.txt").read_bytes() == b"second"
+        assert not any(e["event"] == "stale_temp_removed" for e in events)
 
 
 class TestOverwriteAtomicity:

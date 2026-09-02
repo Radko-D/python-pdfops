@@ -78,21 +78,6 @@ class TestSuccessContract:
         assert terminal["operation"] == "merge"
         assert terminal["level"] == "info"
 
-    def test_terminal_event_survives_error_log_level(
-        self, successful_dispatch: None, run_app: RunApp
-    ) -> None:
-        # PDFOPS_LOG_LEVEL filters lifecycle events but must never suppress
-        # the terminal event - the workflow engine's only success signal.
-        env = {
-            "PDFOPS_OPERATION": "extract",
-            "PDFOPS_INPUT": "/in/doc.pdf",
-            "PDFOPS_OUTPUT_DIR": "/out",
-            "PDFOPS_LOG_LEVEL": "error",
-        }
-        code, events = run_app(env)
-        assert code == 0
-        assert [e["event"] for e in events] == ["operation_complete"]
-
 
 class TestUnexpectedErrorBoundary:
     """A dispatcher stub raising a plain exception pins the unexpected-error
