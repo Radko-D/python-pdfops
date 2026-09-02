@@ -38,6 +38,10 @@ class OpenedInput:
     encrypted: bool
     algorithm: str | None
     password_type: str | None
+    # Recoverable-damage messages the library reported while parsing
+    # ("repairing", xref rebuilt, ...). The operation layer surfaces them as
+    # events; anything unrecoverable raises instead.
+    warnings: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,11 +73,13 @@ class PdfEngine(Protocol):
         inputs: Sequence[OpenedInput],
         destination: Path,
         output_password: Secret | None,
-    ) -> None:
+    ) -> list[str]:
         """Merge ``inputs`` (in order) into a PDF at ``destination``,
         AES-256-encrypted with ``output_password`` when given.
 
         ``destination`` is a temp path provided by the atomic-write layer.
+        Returns library warnings raised during the write (sources may be
+        read lazily, so repairs can surface here rather than at open time).
         """
         ...
 
@@ -82,9 +88,14 @@ class PdfEngine(Protocol):
         (deterministic across runs). Duplicate names are preserved."""
         ...
 
+    def collect_warnings(self, opened: OpenedInput) -> list[str]:
+        """Library warnings accumulated on ``opened`` since the last harvest
+        (lazy readers keep discovering repairs after open time)."""
+        ...
+
 
 def get_engine() -> PdfEngine:
     """The single swap point for the PDF library backing the operations."""
-    from pdf_ops.engine_pypdf import PypdfEngine
+    from pdf_ops.engine_pikepdf import PikepdfEngine
 
-    return PypdfEngine()
+    return PikepdfEngine()

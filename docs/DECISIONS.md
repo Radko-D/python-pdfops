@@ -34,8 +34,9 @@ This document is the authoritative register of all architectural decisions for t
 | [`D-020`](#D-020) | 🟢 | error-handling | Retryability contract: exit codes stay 0-6, retry guidance is documentation | 2026-09-01 | No 10+ transient exit-code band: the 0-6 map is a published API and nearly every failure class is deterministic, so retryability lives in the README - a per-code table (exit 1 the only default-retryable, DISK_FULL the judgment call) and an Argo retryStrategy.expression snippet, paired with PDFOPS_ON_EXISTS=skip for at-least-once safety. | [`DESIGN_NOTES.md section 9`](DESIGN_NOTES.md) | - |
 | [`D-021`](#D-021) | 🟢 | reliability | PDFOPS_ON_EXISTS tri-state: merge whole-run skip, extract per-file completion | 2026-09-01 | fail (default) refuses; overwrite replaces atomically; skip treats existing output as completed prior work - merge short-circuits without reading inputs, extract writes only missing attachments (sound because every written file is atomic and therefore whole). Stale temp debris matching the run's own targets is removed at startup under a documented single-writer-per-output assumption. | [`DESIGN_NOTES.md section 9`](DESIGN_NOTES.md) | - |
 | [`D-022`](#D-022) | 🟢 | reliability | Output files honor the process umask, not mkstemp's 0600 | 2026-09-02 | atomic_output re-chmods its temp file to 0666 & ~umask at creation: mkstemp's private 0600 would ride through os.replace onto the published output, leaving it unreadable by a downstream step running as a different UID on a shared volume. Invisible under Docker Desktop's ownership-mapping mounts, real on native Linux bind mounts - caught by CI on the first Linux-host run. | [`DESIGN_NOTES.md section 6`](DESIGN_NOTES.md) | - |
+| [`D-023`](#D-023) | 🟢 | pdf-engine | Engine swapped to pikepdf; pypdf demoted to dev-dependency test oracle | 2026-09-02 | engine_pikepdf.py (qpdf-backed) replaces engine_pypdf.py as the runtime engine, executing the D-002 plan: better large-file and corrupt-input behavior, native AES-256 (R=6 pinned). password_type user/owner/empty reporting survives via qpdf's password-matched flags; qpdf repairs light damage pypdf refused (pinned as behavior; warnings surface as events - at open via OpenedInput.warnings, after lazy reads/writes via collect_warnings); duplicate attachment names preserved by walking /Names/EmbeddedFiles directly with cycle and type guards (hostile shapes degrade or classify as data problems, never exit 1); the merged output is saved through the atomic layer's open temp file, keeping the single-temp cleanup contract; failed-open algorithm labels come from a best-effort raw /Encrypt scan. pypdf stays in the dev group building fixtures and verifying outputs - every test is a cross-library check. | [`DESIGN_NOTES.md section 1`](DESIGN_NOTES.md) | - |
 
-**Counts:** 22 total decisions - 17 🟢 decided, 0 🟡 pending, 3 ⏸ deferred, 2 🔵 superseded.
+**Counts:** 23 total decisions - 18 🟢 decided, 0 🟡 pending, 3 ⏸ deferred, 2 🔵 superseded.
 
 ### Index by area
 
@@ -45,12 +46,12 @@ This document is the authoritative register of all architectural decisions for t
 |---|---|---|
 | error-handling | 5 | D-003, D-006, D-012, D-015, D-020 |
 | config | 4 | D-004, D-007, D-008, D-009 |
-| pdf-engine | 4 | D-002, D-011, D-016, D-018 |
+| pdf-engine | 5 | D-002, D-011, D-016, D-018, D-023 |
 | security | 4 | D-013, D-014, D-017, D-019 |
 | reliability | 3 | D-010, D-021, D-022 |
 | observability | 1 | D-005 |
 | project | 1 | D-001 |
-| **Total** | **22** | |
+| **Total** | **23** | |
 
 ### Open decisions (🟡 Pending + ⏸ Deferred)
 
@@ -328,6 +329,17 @@ Per-decision details: status, decided date, rationale, related decisions, and th
 - **Reversibility:** cheap
 - **Amends:** [D-010](#D-010)
 - **Where:** [`DESIGN_NOTES.md section 6`](DESIGN_NOTES.md)
+
+<a id="D-023"></a>
+### D-023
+- **Title:** Engine swapped to pikepdf; pypdf demoted to dev-dependency test oracle
+- **Status:** 🟢 Decided
+- **Area:** pdf-engine
+- **Decided on:** 2026-09-02
+- **Summary:** engine_pikepdf.py (qpdf-backed) replaces engine_pypdf.py as the runtime engine, executing the D-002 plan: better large-file and corrupt-input behavior, native AES-256 (R=6 pinned). password_type user/owner/empty reporting survives via qpdf's password-matched flags; qpdf repairs light damage pypdf refused (pinned as behavior; warnings surface as events - at open via OpenedInput.warnings, after lazy reads/writes via collect_warnings); duplicate attachment names preserved by walking /Names/EmbeddedFiles directly with cycle and type guards (hostile shapes degrade or classify as data problems, never exit 1); the merged output is saved through the atomic layer's open temp file, keeping the single-temp cleanup contract; failed-open algorithm labels come from a best-effort raw /Encrypt scan. pypdf stays in the dev group building fixtures and verifying outputs - every test is a cross-library check.
+- **Risk:** medium
+- **Reversibility:** cheap
+- **Where:** [`DESIGN_NOTES.md section 1`](DESIGN_NOTES.md)
 
 ---
 

@@ -41,6 +41,8 @@ def run_extract(config: ExtractConfig, secrets: Secrets, logger: logging.Logger)
             "password_type": opened.password_type,
         },
     )
+    for message in opened.warnings:
+        logger.warning("pdf_library_message", extra={"detail": message, "source": "qpdf"})
     if secrets.password is not None and not opened.encrypted:
         logger.warning(
             "password_unused",
@@ -48,6 +50,9 @@ def run_extract(config: ExtractConfig, secrets: Secrets, logger: logging.Logger)
         )
 
     attachments = engine.list_attachments(opened)
+    for message in engine.collect_warnings(opened):
+        # attachment streams are read lazily, so repairs can surface here
+        logger.warning("pdf_library_message", extra={"detail": message, "source": "qpdf"})
     if not attachments:
         if config.fail_on_no_attachments:
             raise InputError(
@@ -141,7 +146,9 @@ def run_extract(config: ExtractConfig, secrets: Secrets, logger: logging.Logger)
             "attachment_extracted",
             extra={
                 "attachment": item.name,
-                "original_name": item.original if item.original != item.name else None,
+                # capped: the original is attacker-controlled and can be
+                # arbitrarily long - it must not balloon the log stream
+                "original_name": (item.original[:200] if item.original != item.name else None),
                 "bytes": len(item.data),
             },
         )

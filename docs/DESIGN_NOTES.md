@@ -34,6 +34,31 @@ for the resource-behavior and corrupt-input quality dimensions. Keeping the engi
 one seam (`engine.py`) makes the swap a single-module change and forces library exceptions
 to be translated into the application taxonomy in exactly one place.
 
+**Swap executed ([D-023](DECISIONS.md#D-023)):** `engine_pikepdf.py` replaced
+`engine_pypdf.py`; pypdf moved to the dev group, where it still builds every test
+fixture and independently verifies outputs - each green test is a two-library
+cross-check. Realities found at swap time: qpdf exposes which document password a
+supplied string matched (`user_password_matched`/`owner_password_matched`), so the
+`user`/`owner`/`empty` reporting survived intact; qpdf *repairs* light damage
+(truncation, mangled xref) that pypdf refused, so the corrupt-input fixtures had to
+become genuinely unrecoverable and the repair behavior is pinned as its own test with
+warnings surfaced as `pdf_library_message` events (qpdf reports through its own
+channel, not Python logging: open-time warnings ride on `OpenedInput.warnings`, and
+because qpdf reads stream data lazily, repairs discovered during the write or during
+attachment reads are drained afterwards via the engine's `collect_warnings`); the
+merged output is saved through the atomic-write layer's already-open temp file rather
+than by path - handed a path to an existing file, pikepdf would route through its own
+second hidden temp, whose debris after a kill no cleanup would ever match; qpdf hands
+malformed structures over as native Python values, so the walks guard node types and
+keep a builtin-exception net (a hostile name tree must classify as a data problem,
+never as a retryable internal error, and an integer name-tree key must not become an
+attacker-sized `bytes(n)` allocation); when an open fails
+outright there is no handle to read encryption facts from, so the algorithm label on
+`PASSWORD_REQUIRED`/`WRONG_PASSWORD` errors comes from a best-effort raw scan of the
+plaintext `/Encrypt` dictionary; and duplicate-name fidelity required walking
+`/Names/EmbeddedFiles` directly (cycle-guarded) because `Pdf.attachments` is a
+Mapping, exactly as predicted in section 1.
+
 ## 2. Exit-code taxonomy (per [D-003](DECISIONS.md#D-003))
 
 The process exit code is the application's external API toward the workflow engine. Classes,

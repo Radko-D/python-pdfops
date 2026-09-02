@@ -77,23 +77,39 @@ def make_non_pdf(tmp_path: Path) -> Callable[..., Path]:
 
 @pytest.fixture
 def make_corrupt_pdf(make_pdf: Callable[..., Path], tmp_path: Path) -> Callable[..., Path]:
-    """A file with a valid ``%PDF-`` header that fails to parse.
+    """A file with a valid ``%PDF-`` header that no parser can recover.
 
-    ``truncate`` cuts the file in half (destroys xref + EOF marker);
-    ``mangle-xref`` corrupts the cross-reference section in place.
+    qpdf-backed engines repair light damage (truncation, a mangled xref) by
+    reconstructing the cross-reference table, so unrecoverable corruption has
+    to destroy the object structure itself: ``garbage-body`` has no objects
+    or trailer at all; ``no-objects`` keeps the file's shape but breaks every
+    object keyword, leaving reconstruction nothing to find.
     """
 
-    def _make(name: str = "corrupt.pdf", mode: str = "truncate") -> Path:
-        source = make_pdf(name=f"pristine-{name}", pages=2)
-        data = source.read_bytes()
-        if mode == "truncate":
-            data = data[: len(data) // 2]
-        elif mode == "mangle-xref":
-            data = data.replace(b"xref", b"xrfx", 1)
+    def _make(name: str = "corrupt.pdf", mode: str = "garbage-body") -> Path:
+        if mode == "garbage-body":
+            data = b"%PDF-1.7\n" + b"\x89\x00garbage" * 40
+        elif mode == "no-objects":
+            source = make_pdf(name=f"pristine-{name}", pages=2)
+            data = source.read_bytes().replace(b" obj", b" obX")
         else:  # pragma: no cover - guard against typos in tests
             raise ValueError(f"unknown corruption mode: {mode}")
         path = tmp_path / name
         path.write_bytes(data)
+        return path
+
+    return _make
+
+
+@pytest.fixture
+def make_damaged_pdf(make_pdf: Callable[..., Path], tmp_path: Path) -> Callable[..., Path]:
+    """A parseable-after-repair file: real content with a mangled xref. The
+    engine reconstructs the cross-reference table and reports warnings."""
+
+    def _make(name: str = "damaged.pdf") -> Path:
+        source = make_pdf(name=f"pristine-{name}", pages=2)
+        path = tmp_path / name
+        path.write_bytes(source.read_bytes().replace(b"xref", b"xrfx", 1))
         return path
 
     return _make
@@ -154,7 +170,7 @@ def make_encrypted_pdf(tmp_path: Path) -> Callable[..., Path]:
 @pytest.fixture
 def make_dangling_ref_pdf(tmp_path: Path) -> Callable[..., Path]:
     """A parseable PDF whose page /Contents points at a missing object -
-    pypdf merges it successfully but logs a recoverable-corruption warning."""
+    the engine repairs it and reports a recoverable-corruption warning."""
 
     def _make(name: str = "dangling.pdf") -> Path:
         path = tmp_path / name
@@ -174,8 +190,8 @@ def make_dangling_ref_pdf(tmp_path: Path) -> Callable[..., Path]:
 
 @pytest.fixture
 def make_pathological_pdf(tmp_path: Path) -> Callable[..., Path]:
-    """Valid header and xref, but a catalog with no /Pages - pypdf raises a
-    builtin AttributeError instead of its own exception type."""
+    """Valid header and xref, but a catalog with no /Pages - a structural
+    hole that must classify as corrupt, not as an internal error."""
 
     def _make(name: str = "pathological.pdf") -> Path:
         path = tmp_path / name

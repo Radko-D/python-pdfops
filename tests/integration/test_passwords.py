@@ -103,7 +103,9 @@ class TestMergePasswords:
         terminal = events[-1]
         assert terminal["error_code"] == "WRONG_PASSWORD"
         assert terminal["context"]["input"] == str(locked)
-        assert terminal["context"]["algorithm"].startswith("RC4")
+        # exact label: the failed-open scan must find the real /Encrypt
+        # object, not the first /Length token some stream happens to carry
+        assert terminal["context"]["algorithm"] == "RC4-128"
         assert not output.exists()
 
     def test_no_password_on_user_locked_input(
@@ -113,6 +115,18 @@ class TestMergePasswords:
         code, events = run_app(merge_env([locked], out_dir / "m.pdf"))
         assert code == 5
         assert events[-1]["error_code"] == "PASSWORD_REQUIRED"
+
+    def test_password_required_still_reports_aes256_algorithm(
+        self, make_encrypted_pdf: Callable[..., Path], out_dir: Path, run_app: RunApp
+    ) -> None:
+        # When the file cannot be opened at all, the algorithm label comes
+        # from a raw scan of the plaintext /Encrypt dictionary - the
+        # observability must not disappear exactly when the operator needs it.
+        locked = make_encrypted_pdf(password=PW, algorithm="AES-256")
+        code, events = run_app(merge_env([locked], out_dir / "m.pdf"))
+        assert code == 5
+        assert events[-1]["error_code"] == "PASSWORD_REQUIRED"
+        assert events[-1]["context"]["algorithm"] == "AES-256"
 
     def test_owner_only_file_opens_without_password(
         self, make_encrypted_pdf: Callable[..., Path], out_dir: Path, run_app: RunApp
@@ -337,7 +351,9 @@ class TestNoLeak:
             def open_input(self, path: Path, password: Secret | None) -> OpenedInput:
                 raise RuntimeError(f"login failed for {password.reveal() if password else ''}")
 
-            def merge_to(self, inputs: object, destination: Path, output_password: object) -> None:
+            def merge_to(
+                self, inputs: object, destination: Path, output_password: object
+            ) -> list[str]:
                 raise AssertionError("unreachable")
 
             def list_attachments(self, opened: object) -> list[object]:

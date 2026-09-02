@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 
 import pdf_ops.extract
-from tests.conftest import RunApp
+from tests.conftest import RunApp, _build_raw_pdf
 
 pytestmark = pytest.mark.integration
 
@@ -291,6 +291,23 @@ class TestRawNameTreeShapes:
         assert sorted(p.name for p in out_dir.iterdir()) == ["sneak.txt"]
         assert not (tmp_path / "sneak.txt").exists()
 
+    def test_non_ascii_names_survive_with_correct_text(
+        self,
+        make_pdf_with_attachments: Callable[..., Path],
+        out_dir: Path,
+        run_app: RunApp,
+    ) -> None:
+        # Name-tree strings are PDFDocEncoded or UTF-16, not UTF-8 - the
+        # extracted filename must carry the actual characters, not mojibake.
+        resume = "r\u00e9sum\u00e9.pdf"
+        report = "\u043e\u0442\u0447\u0451\u0442.txt"
+        carrier = make_pdf_with_attachments([(resume, b"cv"), (report, b"report")])
+        code, events = run_app(extract_env(carrier, out_dir))
+        assert code == 0
+        assert events[-1]["attachments_extracted"] == 2
+        assert (out_dir / resume).read_bytes() == b"cv"
+        assert (out_dir / report).read_bytes() == b"report"
+
     def test_non_utf8_name_bytes_extract_inside_output_dir(
         self,
         make_raw_attachment_pdf: Callable[..., Path],
@@ -311,13 +328,163 @@ class TestRawNameTreeShapes:
         out_dir: Path,
         run_app: RunApp,
     ) -> None:
-        # pypdf raises NotImplementedError for a filter it doesn't implement;
-        # that must classify as a data problem (exit 4), never exit 1.
+        # A stream filter the engine cannot decode must classify as a data
+        # problem (exit 4), never exit 1.
         carrier = make_raw_attachment_pdf(b"(ok.txt)", filter_entry=b"/FooBar")
         code, events = run_app(extract_env(carrier, out_dir))
         assert code == 4
         assert events[-1]["error_code"] == "UNSUPPORTED_PDF_FEATURE"
         assert list(out_dir.iterdir()) == []
+
+    def test_bare_file_reference_without_embedded_stream_is_skipped(
+        self, tmp_path: Path, out_dir: Path, run_app: RunApp
+    ) -> None:
+        # A filespec with no /EF is a mere pointer to an external file -
+        # there is nothing embedded to extract, and it must not abort the
+        # entries that do carry data.
+        carrier = tmp_path / "bare-ref.pdf"
+        carrier.write_bytes(
+            _build_raw_pdf(
+                [
+                    b"<< /Type /Catalog /Pages 2 0 R /Names << /EmbeddedFiles "
+                    b"<< /Names [ (external.txt) 4 0 R (real.txt) 5 0 R ] >> >> >>",
+                    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+                    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 300] >>",
+                    b"<< /Type /Filespec /F (external.txt) >>",
+                    b"<< /Type /Filespec /F (real.txt) /EF << /F 6 0 R >> >>",
+                    b"<< /Length 7 >>\nstream\npayload\nendstream",
+                ]
+            )
+        )
+        code, events = run_app(extract_env(carrier, out_dir))
+        assert code == 0
+        assert events[-1]["attachments_extracted"] == 1
+        assert (out_dir / "real.txt").read_bytes() == b"payload"
+
+    def test_uf_only_filespec_extracts(
+        self, tmp_path: Path, out_dir: Path, run_app: RunApp
+    ) -> None:
+        # /EF may carry the stream under /UF (unicode name) with no /F.
+        carrier = tmp_path / "uf-only.pdf"
+        carrier.write_bytes(
+            _build_raw_pdf(
+                [
+                    b"<< /Type /Catalog /Pages 2 0 R /Names << /EmbeddedFiles "
+                    b"<< /Names [ (u.txt) 4 0 R ] >> >> >>",
+                    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+                    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 300] >>",
+                    b"<< /Type /Filespec /UF (u.txt) /EF << /UF 5 0 R >> >>",
+                    b"<< /Length 7 >>\nstream\ncontent\nendstream",
+                ]
+            )
+        )
+        code, events = run_app(extract_env(carrier, out_dir))
+        assert code == 0
+        assert events[-1]["attachments_extracted"] == 1
+        assert (out_dir / "u.txt").read_bytes() == b"content"
+
+    @pytest.mark.parametrize(
+        ("tree_object", "expected_count"),
+        [
+            # a /Kids entry whose reference dangles (resolves to null)
+            (b"<< /Kids [ 9 0 R ] >>", 0),
+            # /Names holding an integer instead of an array
+            (b"<< /Names 42 >>", 0),
+            # an integer where a kid node belongs
+            (b"<< /Kids [ 999 ] >>", 0),
+        ],
+    )
+    def test_malformed_tree_shapes_degrade_never_crash(
+        self,
+        tmp_path: Path,
+        out_dir: Path,
+        run_app: RunApp,
+        tree_object: bytes,
+        expected_count: int,
+    ) -> None:
+        # Name trees are attacker-controlled: structurally malformed nodes
+        # must degrade to skipped entries (or classify as a data problem),
+        # never escape as exit 1 - the only class a workflow engine retries.
+        carrier = tmp_path / "malformed.pdf"
+        carrier.write_bytes(
+            _build_raw_pdf(
+                [
+                    b"<< /Type /Catalog /Pages 2 0 R /Names << /EmbeddedFiles 4 0 R >> >>",
+                    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+                    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 300] >>",
+                    tree_object,
+                ]
+            )
+        )
+        code, events = run_app(extract_env(carrier, out_dir))
+        assert code == 0
+        assert events[-1]["attachments_extracted"] == expected_count
+
+    def test_malformed_filespec_ef_is_skipped_sibling_survives(
+        self, tmp_path: Path, out_dir: Path, run_app: RunApp
+    ) -> None:
+        carrier = tmp_path / "bad-ef.pdf"
+        carrier.write_bytes(
+            _build_raw_pdf(
+                [
+                    b"<< /Type /Catalog /Pages 2 0 R /Names << /EmbeddedFiles "
+                    b"<< /Names [ (bad.txt) 4 0 R (good.txt) 5 0 R ] >> >> >>",
+                    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+                    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 300] >>",
+                    b"<< /Type /Filespec /F (bad.txt) /EF 42 >>",
+                    b"<< /Type /Filespec /F (good.txt) /EF << /F 6 0 R >> >>",
+                    b"<< /Length 7 >>\nstream\npayload\nendstream",
+                ]
+            )
+        )
+        code, events = run_app(extract_env(carrier, out_dir))
+        assert code == 0
+        assert events[-1]["attachments_extracted"] == 1
+        assert (out_dir / "good.txt").read_bytes() == b"payload"
+
+    def test_integer_name_key_gets_fallback_name_not_a_giant_allocation(
+        self, tmp_path: Path, out_dir: Path, run_app: RunApp
+    ) -> None:
+        # bytes(int) constructs that many zero bytes - a ~20-byte hostile
+        # entry must not become an attacker-sized allocation. A non-string
+        # key gets the deterministic fallback name; the payload survives.
+        carrier = tmp_path / "int-key.pdf"
+        carrier.write_bytes(
+            _build_raw_pdf(
+                [
+                    b"<< /Type /Catalog /Pages 2 0 R /Names << /EmbeddedFiles "
+                    b"<< /Names [ 999999999 4 0 R ] >> >> >>",
+                    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+                    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 300] >>",
+                    b"<< /Type /Filespec /F (x) /EF << /F 5 0 R >> >>",
+                    b"<< /Length 7 >>\nstream\npayload\nendstream",
+                ]
+            )
+        )
+        code, events = run_app(extract_env(carrier, out_dir))
+        assert code == 0
+        assert events[-1]["attachments_extracted"] == 1
+        assert (out_dir / "attachment_0").read_bytes() == b"payload"
+
+    def test_cyclic_name_tree_terminates(
+        self, tmp_path: Path, out_dir: Path, run_app: RunApp
+    ) -> None:
+        # A hostile name tree can reference itself through /Kids; the walk
+        # must terminate instead of hanging the container.
+        carrier = tmp_path / "cyclic.pdf"
+        carrier.write_bytes(
+            _build_raw_pdf(
+                [
+                    b"<< /Type /Catalog /Pages 2 0 R /Names << /EmbeddedFiles 4 0 R >> >>",
+                    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+                    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 300] >>",
+                    b"<< /Kids [ 4 0 R ] >>",
+                ]
+            )
+        )
+        code, events = run_app(extract_env(carrier, out_dir))
+        assert code == 0
+        assert events[-1]["attachments_extracted"] == 0
 
 
 class TestInvariants:

@@ -33,7 +33,7 @@ Small modules with one-way dependencies:
 | `errors.py` | the exit-code taxonomy and `error_code` vocabulary |
 | `main.py` | `run(env) -> int` - the single error boundary; emits the one terminal event |
 | `engine.py` | the `PdfEngine` Protocol - the library swap seam |
-| `engine_pypdf.py` | the **only** module importing pypdf; translates its failure modes into the taxonomy |
+| `engine_pikepdf.py` | the **only** module importing pikepdf; translates qpdf's failure modes into the taxonomy |
 | `merge.py` / `extract.py` | orchestration: validate everything, then write |
 | `output.py` | atomic writes, existing-output policy, stale-temp cleanup |
 | `logging_setup.py` / `secret.py` | JSON formatter, secret scrubbing, third-party log routing; the `Secret` wrapper |
@@ -47,23 +47,25 @@ one), fsynced, then renamed: the final path holds a complete file or nothing.
 
 ## PDF library
 
-**pypdf today, pikepdf next, behind the seam ([D-002](DECISIONS.md#D-002)).** pypdf
-(BSD-3) is pure Python with the richest attachments API - list-valued, faithful to
-duplicate names - and reports which password matched; its weaknesses are large-file
-memory behavior and no repair path for damaged files. pikepdf (MPL-2.0, qpdf-backed,
-self-contained wheels) is the stronger production engine on exactly those axes, but its
-attachments mapping collapses duplicate names, so the swap walks the
-`/Names/EmbeddedFiles` name tree directly. PyMuPDF was rejected on licensing, not
-capability: shipping an AGPL container image as a workflow step is an exposure this
-project does not accept. Because all library exceptions are translated in one module,
-the swap is a single-module change, and pypdf then stays as a dev-dependency
-cross-checking oracle in the tests.
+**pikepdf in production, pypdf as the test oracle ([D-002](DECISIONS.md#D-002),
+[D-023](DECISIONS.md#D-023)).** The first iterations ran on pypdf (BSD-3, pure Python -
+the fastest start); once the seam and its tests hardened, the engine was swapped to
+pikepdf (MPL-2.0, C++ qpdf backend, self-contained wheels), which is stronger on
+exactly the production axes: large-file memory behavior, corrupt-input robustness, and
+native AES-256. The swap touched one module - the point of the seam - and the whole
+suite passed against the new engine with only the corruption fixtures adapted, because
+qpdf *repairs* light damage (truncation, a mangled xref) that pypdf rejected; those
+repairs surface as warning events rather than being silently absorbed. pypdf remains a
+dev-dependency building test fixtures and independently verifying outputs, so every
+green test is implicitly a two-library cross-check. PyMuPDF was rejected on licensing,
+not capability: shipping an AGPL container image as a workflow step is an exposure
+this project does not accept.
 
-Three pypdf traps are handled explicitly: it leaks *builtin* exceptions on pathological
-files (classified as `CORRUPT_PDF`, not an internal error, so deterministic bad inputs
-don't look retryable); `decrypt()` reports failure through its return value, not an
-exception; and its write-side encryption defaults to legacy RC4 - AES-256 is passed
-explicitly, so output encryption never downgrades.
+qpdf specifics handled explicitly: its attachments mapping collapses duplicate names,
+so extraction walks the `/Names/EmbeddedFiles` name tree directly (cycle-guarded -
+hostile trees can self-reference); parse warnings arrive through qpdf's own channel,
+not Python logging, and are carried per input into the JSON event stream; and output
+encryption pins `R=6` so the result is always AES-256, never a legacy scheme.
 
 ## Operations and attachment security
 
@@ -139,9 +141,9 @@ candidate fixes. (2) One password serves all merge inputs; a per-input map is th
 extension. (3) The extracted *set* is not transactional - files are individually
 atomic, so a staging-directory handoff is the fix if a consumer needs all-or-nothing.
 (4) `skip` trusts an existing file as completed prior output; a checksum-verified skip
-is future work. (5) Resource behavior is unmeasured - the pikepdf swap comes with
-generated large-file benchmarks feeding real K8s requests/limits guidance. (6) An
-OOM-kill is a SIGKILL no in-process error boundary can catch; the workflow engine
-reports it itself - documented rather than handled. Next in line beyond the
-swap: container hardening (digest-pinned base, verified read-only rootfs, a shipped
-Argo `WorkflowTemplate` example) and merge bookmark/metadata carry-over.
+is future work. (5) Resource behavior is unmeasured - generated large-file benchmarks
+feeding real K8s requests/limits guidance are the next step now that the qpdf-backed
+engine is in. (6) An OOM-kill is a SIGKILL no in-process error boundary can catch; the
+workflow engine reports it itself - documented rather than handled. Next in line:
+container hardening (digest-pinned base, verified read-only rootfs, a shipped Argo
+`WorkflowTemplate` example) and merge bookmark/metadata carry-over.

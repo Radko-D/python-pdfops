@@ -135,10 +135,12 @@ class _ThirdPartyEventFilter(logging.Filter):
 
 
 # Loggers whose records must reach stdout as JSON instead of falling through
-# to logging.lastResort on stderr: the PDF library's recoverable-corruption
-# warnings, and Python warnings (via logging.captureWarnings below). Anything
-# on stderr would break the JSON-only/empty-stderr operator contract.
-_THIRD_PARTY_LOGGERS = ("pypdf", "py.warnings")
+# to logging.lastResort on stderr: anything the PDF library routes through
+# Python logging, and Python warnings (via logging.captureWarnings below).
+# Anything on stderr would break the JSON-only/empty-stderr operator
+# contract. (qpdf's own parse warnings don't pass through here - the engine
+# collects them per input and the operation layer emits them as events.)
+_THIRD_PARTY_LOGGERS = ("pikepdf", "py.warnings")
 
 
 def setup_logging(level: int = logging.INFO) -> logging.Logger:

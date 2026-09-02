@@ -51,6 +51,8 @@ def run_merge(
                 "password_type": one.password_type,
             },
         )
+        for message in one.warnings:
+            logger.warning("pdf_library_message", extra={"detail": message, "source": "qpdf"})
 
     encrypted_count = sum(1 for one in opened if one.encrypted)
     output_password, password_source = _choose_output_password(config, secrets, encrypted_count)
@@ -78,7 +80,10 @@ def run_merge(
         )
 
     with atomic_output(config.output) as tmp_path:
-        engine.merge_to(opened, tmp_path, output_password)
+        late_warnings = engine.merge_to(opened, tmp_path, output_password)
+    for message in late_warnings:
+        # sources are read lazily, so repairs can surface at write time
+        logger.warning("pdf_library_message", extra={"detail": message, "source": "qpdf"})
     if action == "overwrite":
         logger.info("output_overwritten", extra={"output_path": str(config.output)})
 
