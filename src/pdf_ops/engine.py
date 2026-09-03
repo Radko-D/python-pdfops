@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
-from pdf_ops.secret import Secret
+from pdf_ops.secrets import Secret
 
 
 @dataclass(frozen=True, slots=True)

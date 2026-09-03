@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import ClassVar, Literal
 
 from pdf_ops.errors import ConfigError
-from pdf_ops.secret import Secret
+from pdf_ops.secrets import EnvSecret, FileSecret, Secret, SecretRef
 
 ENV_PREFIX = "PDFOPS_"
 
@@ -107,24 +107,6 @@ class OutputEncryption(StrEnum):
     NEVER = "never"
     INHERIT = "inherit"
     ALWAYS = "always"
-
-
-@dataclass(frozen=True, slots=True)
-class EnvSecret:
-    """A secret supplied directly in an environment variable."""
-
-    value: Secret
-
-
-@dataclass(frozen=True, slots=True)
-class FileSecret:
-    """A secret to be read from a mounted file (resolved after parsing -
-    the parser itself stays filesystem-free)."""
-
-    path: Path
-
-
-type SecretRef = EnvSecret | FileSecret
 
 
 @dataclass(frozen=True, slots=True)
@@ -394,83 +376,3 @@ def _parse_output_password(env: Mapping[str, str], password: SecretRef | None) -
             context={"var": VAR_OUTPUT_ENCRYPTION},
         )
     return output_password
-
-
-def resolve_secret(ref: SecretRef | None) -> Secret | None:
-    """Materialize a secret reference; the one place secret file I/O happens.
-
-    A single trailing newline is stripped (hand-created secret files usually
-    have one; the password itself is otherwise taken byte-for-byte).
-    """
-    match ref:
-        case None:
-            return None
-        case EnvSecret(value=value):
-            _reject_control_characters(value.reveal(), "the environment")
-            return value
-        case FileSecret(path=path):
-            try:
-                raw = path.read_text(encoding="utf-8")
-            except OSError as err:
-                raise ConfigError(
-                    f"cannot read password file {path}: {err.strerror or err}",
-                    error_code="PASSWORD_FILE_UNREADABLE",
-                    context={"path": str(path)},
-                ) from err
-            except UnicodeDecodeError as err:
-                # Deliberately no decode detail: it would name a byte of the
-                # secret and its position.
-                raise ConfigError(
-                    f"password file {path} is not valid UTF-8 text",
-                    error_code="PASSWORD_FILE_UNREADABLE",
-                    context={"path": str(path)},
-                ) from err
-            raw = raw.removesuffix("\n").removesuffix("\r")
-            if not raw:
-                raise ConfigError(
-                    f"password file {path} is empty",
-                    error_code="EMPTY_PASSWORD",
-                    context={"path": str(path)},
-                )
-            _reject_control_characters(raw, str(path))
-            return Secret(raw)
-
-
-def _reject_control_characters(value: str, origin: str) -> None:
-    """A password containing control characters is almost certainly an
-    encoding or copy-paste accident - and downstream cryptographic
-    normalization (SASLprep) would warn about it, naming the codepoint."""
-    if any(ord(ch) < 32 or 0x7F <= ord(ch) <= 0x9F for ch in value):
-        raise ConfigError(
-            f"the password from {origin} contains control characters "
-            "(check for encoding or copy-paste issues)",
-            error_code="PASSWORD_UNSUPPORTED_CHARACTERS",
-            context={"source": origin},
-        )
-
-
-@dataclass(frozen=True, slots=True)
-class Secrets:
-    """Materialized secrets for one run, resolved from the config's refs."""
-
-    password: Secret | None
-    output_password: Secret | None
-
-
-def resolve_secrets(config: Config) -> Secrets:
-    """Read any file-based secrets; raises ConfigError on unreadable/empty files."""
-    output_password = (
-        resolve_secret(config.output_password) if isinstance(config, MergeConfig) else None
-    )
-    return Secrets(password=resolve_secret(config.password), output_password=output_password)
-
-
-def describe_secret(ref: SecretRef | None) -> str:
-    """Presence-only description for the config-echo log event."""
-    match ref:
-        case None:
-            return "unset"
-        case EnvSecret():
-            return "set(env)"
-        case FileSecret():
-            return "set(file)"

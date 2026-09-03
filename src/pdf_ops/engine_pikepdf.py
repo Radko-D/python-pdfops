@@ -17,7 +17,7 @@ import pikepdf
 
 from pdf_ops.engine import Attachment, OpenedInput
 from pdf_ops.errors import InvalidPdfError, PasswordError
-from pdf_ops.secret import Secret
+from pdf_ops.secrets import Secret
 
 # pikepdf converts PDF integers/reals/booleans/null to native Python values,
 # so type-blind access on attacker-controlled structures (a name tree whose

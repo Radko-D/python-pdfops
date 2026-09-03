@@ -13,7 +13,7 @@ from pdf_ops.logging_setup import (
     clear_registered_secrets,
     register_secret_value,
 )
-from pdf_ops.secret import Secret
+from pdf_ops.secrets import Secret
 
 pytestmark = pytest.mark.unit
 

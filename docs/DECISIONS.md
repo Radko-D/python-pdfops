@@ -2,7 +2,7 @@
 
 > **Project:** Containerized PDF operations (merge, extract attachments) for workflow systems
 > **Started:** 2026-08-31
-> **Last updated:** 2026-09-02
+> **Last updated:** 2026-09-03
 
 This document is the authoritative register of all architectural decisions for this project. New decisions are appended with the next available `D-###`. See [DECISION_TRACKING_STANDARD.md](DECISION_TRACKING_STANDARD.md) for format, vocabularies, and workflow. CI validation: [`scripts/validate_decisions.py`](scripts/validate_decisions.py).
 
@@ -35,8 +35,9 @@ This document is the authoritative register of all architectural decisions for t
 | [`D-021`](#D-021) | 🟢 | reliability | PDFOPS_ON_EXISTS tri-state: merge whole-run skip, extract per-file completion | 2026-09-01 | fail (default) refuses; overwrite replaces atomically; skip treats existing output as completed prior work - merge short-circuits without reading inputs, extract writes only missing attachments (sound because every written file is atomic and therefore whole). Stale temp debris matching the run's own targets is removed at startup under a documented single-writer-per-output assumption. | [`DESIGN_NOTES.md section 9`](DESIGN_NOTES.md) | - |
 | [`D-022`](#D-022) | 🟢 | reliability | Output files honor the process umask, not mkstemp's 0600 | 2026-09-02 | atomic_output re-chmods its temp file to 0666 & ~umask at creation: mkstemp's private 0600 would ride through os.replace onto the published output, leaving it unreadable by a downstream step running as a different UID on a shared volume. Invisible under Docker Desktop's ownership-mapping mounts, real on native Linux bind mounts - caught by CI on the first Linux-host run. | [`DESIGN_NOTES.md section 6`](DESIGN_NOTES.md) | - |
 | [`D-023`](#D-023) | 🟢 | pdf-engine | Engine swapped to pikepdf; pypdf demoted to dev-dependency test oracle | 2026-09-02 | engine_pikepdf.py (qpdf-backed) replaces engine_pypdf.py as the runtime engine, executing the D-002 plan: better large-file and corrupt-input behavior, native AES-256 (R=6 pinned). password_type user/owner/empty reporting survives via qpdf's password-matched flags; qpdf repairs light damage pypdf refused (pinned as behavior; warnings surface as events - at open via OpenedInput.warnings, after lazy reads/writes via collect_warnings); duplicate attachment names preserved by walking /Names/EmbeddedFiles directly with cycle and type guards (hostile shapes degrade or classify as data problems, never exit 1); the merged output is saved through the atomic layer's open temp file, keeping the single-temp cleanup contract; failed-open algorithm labels come from a best-effort raw /Encrypt scan. pypdf stays in the dev group building fixtures and verifying outputs - every test is a cross-library check. | [`DESIGN_NOTES.md section 1`](DESIGN_NOTES.md) | - |
+| [`D-024`](#D-024) | 🟢 | security | Secrets stay stdlib, consolidated into one module | 2026-09-03 | All secret handling (Secret wrapper, EnvSecret/FileSecret source refs with resolve()/describe(), Secrets bundle, scrub registration) consolidated into secrets.py; config.py only parses which source is configured. Shelf options evaluated and rejected: pydantic SecretStr (compiled dependency for one masked-repr class), pydantic-settings (config-layer rewrite; secrets_dir expects field-named files in a fixed directory - a different contract from PDFOPS_PASSWORD_FILE=<any path>; ValidationError would need retranslation into the error_code taxonomy), scanner-style log redactors (pattern heuristics, weaker than the exact-value field-restricted scrub that avoids the password-oracle problem). | [`DESIGN_NOTES.md section 8`](DESIGN_NOTES.md) | - |
 
-**Counts:** 23 total decisions - 18 🟢 decided, 0 🟡 pending, 3 ⏸ deferred, 2 🔵 superseded.
+**Counts:** 24 total decisions - 19 🟢 decided, 0 🟡 pending, 3 ⏸ deferred, 2 🔵 superseded.
 
 ### Index by area
 
@@ -47,11 +48,11 @@ This document is the authoritative register of all architectural decisions for t
 | error-handling | 5 | D-003, D-006, D-012, D-015, D-020 |
 | config | 4 | D-004, D-007, D-008, D-009 |
 | pdf-engine | 5 | D-002, D-011, D-016, D-018, D-023 |
-| security | 4 | D-013, D-014, D-017, D-019 |
+| security | 5 | D-013, D-014, D-017, D-019, D-024 |
 | reliability | 3 | D-010, D-021, D-022 |
 | observability | 1 | D-005 |
 | project | 1 | D-001 |
-| **Total** | **23** | |
+| **Total** | **24** | |
 
 ### Open decisions (🟡 Pending + ⏸ Deferred)
 
@@ -340,6 +341,17 @@ Per-decision details: status, decided date, rationale, related decisions, and th
 - **Risk:** medium
 - **Reversibility:** cheap
 - **Where:** [`DESIGN_NOTES.md section 1`](DESIGN_NOTES.md)
+
+<a id="D-024"></a>
+### D-024
+- **Title:** Secrets stay stdlib, consolidated into one module
+- **Status:** 🟢 Decided
+- **Area:** security
+- **Decided on:** 2026-09-03
+- **Summary:** All secret handling (Secret wrapper, EnvSecret/FileSecret source refs with resolve()/describe(), Secrets bundle, scrub registration) consolidated into secrets.py; config.py only parses which source is configured. Shelf options evaluated and rejected: pydantic SecretStr (compiled dependency for one masked-repr class), pydantic-settings (config-layer rewrite; secrets_dir expects field-named files in a fixed directory - a different contract from PDFOPS_PASSWORD_FILE=<any path>; ValidationError would need retranslation into the error_code taxonomy), scanner-style log redactors (pattern heuristics, weaker than the exact-value field-restricted scrub that avoids the password-oracle problem).
+- **Risk:** low
+- **Reversibility:** cheap
+- **Where:** [`DESIGN_NOTES.md section 8`](DESIGN_NOTES.md)
 
 ---
 

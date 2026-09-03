@@ -36,7 +36,8 @@ Small modules with one-way dependencies:
 | `engine_pikepdf.py` | the **only** module importing pikepdf; translates qpdf's failure modes into the taxonomy |
 | `merge.py` / `extract.py` | orchestration: validate everything, then write |
 | `output.py` | atomic writes, existing-output policy, stale-temp cleanup |
-| `logging_setup.py` / `secret.py` | JSON formatter, secret scrubbing, third-party log routing; the `Secret` wrapper |
+| `secrets.py` | the whole secret lifecycle: `Secret` wrapper, source refs, resolution, scrub registration |
+| `logging_setup.py` | JSON formatter, secret scrubbing, third-party log routing |
 
 Cross-cutting rules: unknown or operation-inapplicable `PDFOPS_*` variables are hard
 errors - a silently ignored misspelling becomes a confusing downstream failure

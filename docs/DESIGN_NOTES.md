@@ -240,6 +240,15 @@ rather than half-supported.
 
 ## 8. Passwords and output encryption (per [D-017](DECISIONS.md#D-017), [D-018](DECISIONS.md#D-018), [D-019](DECISIONS.md#D-019))
 
+**Where the code lives ([D-024](DECISIONS.md#D-024)):** the whole lifecycle - wrapper,
+source refs, resolution, scrub registration - sits in one module (`secrets.py`) after
+an evaluation of the shelf options: pydantic's `SecretStr` buys one masked-repr class
+for a compiled dependency; pydantic-settings would rewrite the config layer, and its
+`secrets_dir` convention (field-named files in a fixed directory) is a different
+contract from `PDFOPS_PASSWORD_FILE=<any mounted path>`; scanner-style log redactors
+are pattern-heuristic - strictly weaker than the exact-value, field-restricted scrub
+below, which exists precisely because naive scrubbing becomes a password oracle.
+
 **Channels ([D-017](DECISIONS.md#D-017)):** one password, two mutually exclusive sources -
 `PDFOPS_PASSWORD_FILE` (a mounted secret, the preferred channel: it never appears in pod
 specs, `kubectl describe`, or `/proc/<pid>/environ`) and `PDFOPS_PASSWORD` (kept for local

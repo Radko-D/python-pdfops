@@ -17,7 +17,7 @@ from pypdf import PdfReader
 import pdf_ops.merge
 from pdf_ops.engine import OpenedInput
 from pdf_ops.main import run
-from pdf_ops.secret import Secret
+from pdf_ops.secrets import Secret
 from tests.conftest import RunApp
 from tests.integration.test_extract import extract_env
 from tests.integration.test_merge import merge_env
@@ -472,6 +472,31 @@ class TestReviewHardening:
         code, events = run_app(merge_env([owner_only], out_dir / "m.pdf"))
         assert code == 0
         assert any(e["event"] == "security_downgrade" for e in events)
+
+    def test_both_secrets_bad_reports_the_input_password_first(
+        self,
+        make_pdf: Callable[..., Path],
+        tmp_path: Path,
+        out_dir: Path,
+        run_app: RunApp,
+    ) -> None:
+        # The input password resolves before the output password, so a run
+        # where both sources are broken names the primary secret's problem.
+        empty_pw = tmp_path / "empty-pw"
+        empty_pw.write_text("")
+        missing_out_pw = tmp_path / "gone-pw"
+        plain = make_pdf()
+        env = merge_env(
+            [plain],
+            out_dir / "m.pdf",
+            PDFOPS_PASSWORD_FILE=str(empty_pw),
+            PDFOPS_OUTPUT_ENCRYPTION="always",
+            PDFOPS_OUTPUT_PASSWORD_FILE=str(missing_out_pw),
+        )
+        code, events = run_app(env)
+        assert code == 2
+        assert events[-1]["error_code"] == "EMPTY_PASSWORD"
+        assert events[-1]["context"]["path"] == str(empty_pw)
 
     def test_short_password_degrades_redaction_with_warning(
         self, make_encrypted_pdf: Callable[..., Path], out_dir: Path, run_app: RunApp

@@ -7,11 +7,11 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
-from pdf_ops.config import MergeConfig, OutputEncryption, Secrets
+from pdf_ops.config import MergeConfig, OutputEncryption
 from pdf_ops.engine import OpenedInput, get_engine
 from pdf_ops.errors import ConfigError, InputError, InvalidPdfError, PdfOpsError
 from pdf_ops.output import atomic_output, check_output_path, clean_stale_temps
-from pdf_ops.secret import Secret
+from pdf_ops.secrets import Secret, Secrets
 
 PDF_MAGIC = b"%PDF-"
 
