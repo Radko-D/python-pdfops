@@ -33,7 +33,8 @@ output policies, and what the log stream carries. The short reference tables
 - Each `input_opened` event reports the encryption algorithm (read from the PDF's
   plaintext `/Encrypt` dictionary) and how the file opened (`user`/`owner`/`empty`).
 - A permissions-locked input among user-locked ones never fails just because a
-  password was supplied: the empty try still applies per input.
+  password was supplied: the empty try still applies per input (the exact call
+  sequence is drawn in [`diagrams/index.html#passwords`](diagrams/index.html#passwords)).
 - Passwords containing control characters are rejected (exit 2) as encoding
   accidents.
 - Note the env channel's inherent limit: the initial environment block stays visible
@@ -68,7 +69,9 @@ is `never` is a hard configuration error.
   atomic and therefore whole. Both `skip` modes trust that an existing file is a
   completed prior output.
 - Temp debris from a crashed prior run (`.name.*.tmp` matching this run's own
-  targets) is removed at startup with a `stale_temp_removed` event. One writer per
+  targets) is removed at startup with a `stale_temp_removed` event. The whole
+  run/retry state machine is drawn in
+  [`diagrams/index.html#lifecycle`](diagrams/index.html#lifecycle). One writer per
   output path at a time is assumed - which a workflow engine guarantees per step.
 - All inputs are validated (existence, readability, PDF header) **before anything is
   written**, and every bad input is reported in a single failure event.
@@ -80,6 +83,8 @@ is `never` is a hard configuration error.
   characters removed; deterministic `attachment_<n>` fallback), so a hostile PDF can
   never write outside `PDFOPS_OUTPUT_DIR`. Duplicate names get deterministic
   `-1`/`-2` suffixes; the original name is logged whenever sanitization changed it.
+- The path every untrusted name travels is drawn in
+  [`diagrams/index.html#extract`](diagrams/index.html#extract).
 - Extraction order is the PDF's name-tree order - deterministic across runs. Each
   file is written atomically; under the default `fail` policy any pre-existing file
   (or symlink) at a target name refuses the whole run **before** anything is written

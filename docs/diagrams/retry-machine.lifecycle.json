@@ -1,0 +1,255 @@
+{
+  "schema_version": 1,
+  "diagram_type": "lifecycle",
+  "meta": {
+    "title": "Run Lifecycle and Retry Semantics",
+    "quality_profile": "showcase",
+    "views": [
+      {
+        "id": "happy-run",
+        "label": "One clean run",
+        "focus": [
+          "invoked",
+          "parsed",
+          "existscheck",
+          "publishing",
+          "complete"
+        ],
+        "note": "Follow a run from invocation to the atomically published output."
+      },
+      {
+        "id": "policy-branches",
+        "label": "Existing-output policy",
+        "focus": [
+          "existscheck",
+          "skipped",
+          "refused"
+        ],
+        "note": "PDFOPS_ON_EXISTS decides what an existing output means."
+      },
+      {
+        "id": "crash-retry",
+        "label": "Crash and retry",
+        "focus": [
+          "publishing",
+          "killed",
+          "parsed"
+        ],
+        "note": "A killed run leaves debris the next run removes before writing."
+      }
+    ]
+  },
+  "lanes": [
+    {
+      "id": "main",
+      "label": "Run phases"
+    },
+    {
+      "id": "recovery",
+      "label": "Interruptions"
+    },
+    {
+      "id": "terminal",
+      "label": "Policy outcomes"
+    }
+  ],
+  "states": [
+    {
+      "id": "invoked",
+      "type": "start",
+      "label": "Invoked",
+      "sublabel": "one operation per run",
+      "lane": "main",
+      "col": 0,
+      "step": "01",
+      "tag": "entry"
+    },
+    {
+      "id": "parsed",
+      "type": "active",
+      "label": "Config parsed",
+      "sublabel": "before any file I/O",
+      "lane": "main",
+      "col": 1,
+      "step": "02",
+      "tag": "pure"
+    },
+    {
+      "id": "existscheck",
+      "type": "decision",
+      "label": "Output exists?",
+      "sublabel": "PDFOPS_ON_EXISTS",
+      "lane": "main",
+      "col": 2,
+      "step": "03",
+      "tag": "policy"
+    },
+    {
+      "id": "publishing",
+      "type": "active",
+      "label": "Temp write",
+      "sublabel": "fsync, then one rename",
+      "lane": "main",
+      "col": 3,
+      "step": "04",
+      "tag": "atomic"
+    },
+    {
+      "id": "complete",
+      "type": "success",
+      "label": "Complete",
+      "sublabel": "exit 0, terminal event",
+      "lane": "main",
+      "col": 4,
+      "step": "05",
+      "tag": "done"
+    },
+    {
+      "id": "skipped",
+      "type": "success",
+      "label": "Skipped",
+      "sublabel": "exit 0, reads nothing",
+      "lane": "terminal",
+      "col": 0,
+      "tag": "skip"
+    },
+    {
+      "id": "killed",
+      "type": "failure",
+      "label": "Killed mid-write",
+      "sublabel": "temp debris only",
+      "lane": "recovery",
+      "col": 2,
+      "tag": "retryable"
+    },
+    {
+      "id": "refused",
+      "type": "failure",
+      "label": "OUTPUT_EXISTS",
+      "sublabel": "exit 6, no clobber",
+      "lane": "terminal",
+      "col": 1,
+      "tag": "fail"
+    }
+  ],
+  "transitions": [
+    {
+      "id": "policy-skip",
+      "from": "existscheck",
+      "to": "skipped",
+      "label": "skip: completed prior work",
+      "variant": "emphasis",
+      "route": "drop"
+    },
+    {
+      "id": "policy-fail",
+      "from": "existscheck",
+      "to": "refused",
+      "label": "fail (default)",
+      "variant": "security",
+      "fromSide": "right",
+      "toSide": "top",
+      "via": [
+        [
+          479,
+          157
+        ],
+        [
+          479,
+          212
+        ],
+        [
+          556,
+          212
+        ]
+      ],
+      "labelAt": [
+        517,
+        200
+      ]
+    },
+    {
+      "id": "write-killed",
+      "from": "publishing",
+      "to": "killed",
+      "label": "pod lost",
+      "variant": "security",
+      "labelAt": [
+        672,
+        246
+      ],
+      "fromSide": "right",
+      "toSide": "top",
+      "via": [
+        [
+          633,
+          157
+        ],
+        [
+          633,
+          258
+        ],
+        [
+          710,
+          258
+        ]
+      ]
+    },
+    {
+      "id": "retry-cleanup",
+      "from": "killed",
+      "to": "parsed",
+      "label": "retry: stale temp removed",
+      "variant": "emphasis",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "via": [
+        [
+          710,
+          560
+        ],
+        [
+          16,
+          560
+        ],
+        [
+          16,
+          60
+        ],
+        [
+          248,
+          60
+        ]
+      ]
+    }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "Atomicity",
+      "items": [
+        "The final path holds a complete file or nothing",
+        "Work happens in a temp file inside the destination directory",
+        "One rename publishes; a crash leaves only namable debris"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Idempotent retries",
+      "items": [
+        "skip treats an existing output as finished work and reads nothing",
+        "extract completes a partial set file by file under skip",
+        "overwrite replaces atomically for reprocessing pipelines"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Deterministic failures",
+      "items": [
+        "Exit classes 2-6 are permanent; retrying them is waste",
+        "Only exit 1 and pod-level errors are worth a retry",
+        "The terminal JSON event carries the machine-readable error_code"
+      ]
+    }
+  ]
+}

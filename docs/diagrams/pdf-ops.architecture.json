@@ -1,0 +1,411 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "pdf-ops Module Architecture",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/Radko-D/python-pdfops",
+      "revision": "4048949b37bd51cb22a99d72c5a6e061eb9f0c24"
+    },
+    "views": [
+      {
+        "id": "operation-path",
+        "label": "Operation path",
+        "focus": [
+          "envvars",
+          "configparse",
+          "runboundary",
+          "mergeop",
+          "extractop",
+          "engineseam",
+          "qpdfengine",
+          "atomicwrite"
+        ],
+        "note": "Follow one run from environment variables to the atomically published output."
+      },
+      {
+        "id": "noleak-path",
+        "label": "Secret handling",
+        "focus": [
+          "runboundary",
+          "secretstore",
+          "qpdfengine"
+        ],
+        "note": "Secrets resolve lazily and reveal only inside the engine."
+      },
+      {
+        "id": "operator-interface",
+        "label": "Operator interface",
+        "focus": [
+          "runboundary",
+          "eventstream",
+          "workflowengine"
+        ],
+        "note": "JSON events and the exit code are the only outward surfaces."
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "envvars",
+      "type": "external",
+      "label": "Environment",
+      "sublabel": "PDFOPS_* variables",
+      "pos": [
+        40,
+        300
+      ],
+      "size": [
+        140,
+        60
+      ]
+    },
+    {
+      "id": "configparse",
+      "type": "backend",
+      "label": "Config parser",
+      "sublabel": "pure, filesystem-free",
+      "pos": [
+        250,
+        300
+      ],
+      "size": [
+        150,
+        60
+      ],
+      "tag": "exit 2 fast",
+      "sources": [
+        {
+          "path": "src/pdf_ops/config.py",
+          "line": 138,
+          "end_line": 190,
+          "label": "parse_config"
+        }
+      ]
+    },
+    {
+      "id": "runboundary",
+      "type": "backend",
+      "label": "Error boundary",
+      "sublabel": "run(env) -> exit code",
+      "pos": [
+        470,
+        300
+      ],
+      "size": [
+        150,
+        60
+      ],
+      "tag": "one terminal event",
+      "sources": [
+        {
+          "path": "src/pdf_ops/main.py",
+          "line": 18,
+          "end_line": 100,
+          "label": "run"
+        }
+      ]
+    },
+    {
+      "id": "secretstore",
+      "type": "security",
+      "label": "Secrets",
+      "sublabel": "wrapper + resolution",
+      "pos": [
+        470,
+        130
+      ],
+      "size": [
+        150,
+        64
+      ],
+      "tag": "renders ***",
+      "sources": [
+        {
+          "path": "src/pdf_ops/secrets.py",
+          "line": 31,
+          "end_line": 60,
+          "label": "Secret"
+        },
+        {
+          "path": "src/pdf_ops/secrets.py",
+          "line": 131,
+          "end_line": 155,
+          "label": "resolve_and_register"
+        }
+      ]
+    },
+    {
+      "id": "mergeop",
+      "type": "backend",
+      "label": "Merge",
+      "sublabel": "validate all, then write",
+      "pos": [
+        690,
+        210
+      ],
+      "size": [
+        140,
+        60
+      ],
+      "sources": [
+        {
+          "path": "src/pdf_ops/merge.py",
+          "line": 22,
+          "end_line": 110,
+          "label": "run_merge"
+        }
+      ]
+    },
+    {
+      "id": "extractop",
+      "type": "backend",
+      "label": "Extract",
+      "sublabel": "names are untrusted",
+      "pos": [
+        690,
+        390
+      ],
+      "size": [
+        140,
+        60
+      ],
+      "sources": [
+        {
+          "path": "src/pdf_ops/extract.py",
+          "line": 29,
+          "end_line": 100,
+          "label": "run_extract"
+        },
+        {
+          "path": "src/pdf_ops/extract.py",
+          "line": 196,
+          "end_line": 230,
+          "label": "sanitizer"
+        }
+      ]
+    },
+    {
+      "id": "engineseam",
+      "type": "backend",
+      "label": "PdfEngine Protocol",
+      "sublabel": "the swap seam",
+      "pos": [
+        900,
+        300
+      ],
+      "size": [
+        160,
+        60
+      ],
+      "tag": "one importer",
+      "sources": [
+        {
+          "path": "src/pdf_ops/engine.py",
+          "line": 60,
+          "end_line": 95,
+          "label": "Protocol"
+        }
+      ]
+    },
+    {
+      "id": "qpdfengine",
+      "type": "backend",
+      "label": "pikepdf engine",
+      "sublabel": "taxonomy translation",
+      "pos": [
+        1130,
+        300
+      ],
+      "size": [
+        150,
+        60
+      ],
+      "tag": "qpdf-backed",
+      "sources": [
+        {
+          "path": "src/pdf_ops/engine_pikepdf.py",
+          "line": 39,
+          "end_line": 120,
+          "label": "PikepdfEngine"
+        }
+      ]
+    },
+    {
+      "id": "atomicwrite",
+      "type": "database",
+      "label": "Atomic output",
+      "sublabel": "temp + fsync + rename",
+      "pos": [
+        1130,
+        470
+      ],
+      "size": [
+        150,
+        60
+      ],
+      "tag": "whole or absent",
+      "sources": [
+        {
+          "path": "src/pdf_ops/output.py",
+          "line": 105,
+          "end_line": 132,
+          "label": "atomic_output"
+        }
+      ]
+    },
+    {
+      "id": "eventstream",
+      "type": "messagebus",
+      "label": "JSON log stream",
+      "sublabel": "stdout, stderr empty",
+      "pos": [
+        470,
+        470
+      ],
+      "size": [
+        150,
+        60
+      ],
+      "sources": [
+        {
+          "path": "src/pdf_ops/logging_setup.py",
+          "line": 146,
+          "end_line": 175,
+          "label": "setup_logging"
+        }
+      ]
+    },
+    {
+      "id": "workflowengine",
+      "type": "external",
+      "label": "Workflow engine",
+      "sublabel": "Argo step",
+      "pos": [
+        130,
+        470
+      ],
+      "size": [
+        150,
+        60
+      ],
+      "tag": "at-least-once"
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "security-group",
+      "label": "sole PDF-library importer",
+      "wraps": [
+        "engineseam",
+        "qpdfengine"
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "env-parse",
+      "from": "envvars",
+      "to": "configparse",
+      "label": "12 variables",
+      "variant": "emphasis"
+    },
+    {
+      "id": "parse-run",
+      "from": "configparse",
+      "to": "runboundary",
+      "label": "typed config"
+    },
+    {
+      "id": "run-merge",
+      "from": "runboundary",
+      "to": "mergeop"
+    },
+    {
+      "id": "run-extract",
+      "from": "runboundary",
+      "to": "extractop"
+    },
+    {
+      "id": "merge-seam",
+      "from": "mergeop",
+      "to": "engineseam"
+    },
+    {
+      "id": "extract-seam",
+      "from": "extractop",
+      "to": "engineseam"
+    },
+    {
+      "id": "seam-engine",
+      "from": "engineseam",
+      "to": "qpdfengine",
+      "label": "get_engine()",
+      "labelDy": 22
+    },
+    {
+      "id": "engine-write",
+      "from": "qpdfengine",
+      "to": "atomicwrite",
+      "label": "saves into open temp",
+      "labelDy": 45
+    },
+    {
+      "id": "run-secrets",
+      "from": "runboundary",
+      "to": "secretstore",
+      "label": "resolve lazily",
+      "variant": "security"
+    },
+    {
+      "id": "secrets-engine",
+      "from": "secretstore",
+      "to": "qpdfengine",
+      "label": "reveal() at decrypt",
+      "variant": "security"
+    },
+    {
+      "id": "run-events",
+      "from": "runboundary",
+      "to": "eventstream",
+      "variant": "dashed"
+    },
+    {
+      "id": "events-argo",
+      "from": "eventstream",
+      "to": "workflowengine",
+      "label": "terminal event + exit code",
+      "variant": "emphasis"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Contract",
+      "items": [
+        "Configuration is parsed completely before any file is touched",
+        "Exactly one terminal JSON event per run; the exit code is the API",
+        "Exit classes 0-6 with machine-readable error_code strings"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Seam",
+      "items": [
+        "One module imports the PDF library and translates its failures",
+        "The pypdf-to-pikepdf swap touched exactly that module",
+        "pypdf remains as the cross-checking test oracle"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "No-leak layers",
+      "items": [
+        "Secrets resolve lazily - a skipped merge never reads the password file",
+        "The raw value is reachable only inside the engine",
+        "Log scrubbing is field-restricted to avoid a password oracle"
+      ]
+    }
+  ]
+}

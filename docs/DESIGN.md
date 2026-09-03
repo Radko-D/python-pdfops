@@ -39,6 +39,11 @@ Small modules with one-way dependencies:
 | `secrets.py` | the whole secret lifecycle: `Secret` wrapper, source refs, resolution, scrub registration |
 | `logging_setup.py` | JSON formatter, secret scrubbing, third-party log routing |
 
+An interactive map of these modules - each node linking to the source lines it
+describes - lives at [`diagrams/index.html`](diagrams/index.html#architecture),
+alongside diagrams of the retry lifecycle, the extract trust boundary, and the
+password flow, all navigable from one page.
+
 Cross-cutting rules: unknown or operation-inapplicable `PDFOPS_*` variables are hard
 errors - a silently ignored misspelling becomes a confusing downstream failure
 ([D-004](DECISIONS.md#D-004)). All inputs are validated up front and *every* problem is
