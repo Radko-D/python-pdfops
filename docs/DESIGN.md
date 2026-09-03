@@ -142,9 +142,12 @@ candidate fixes. (2) One password serves all merge inputs; a per-input map is th
 extension. (3) The extracted *set* is not transactional - files are individually
 atomic, so a staging-directory handoff is the fix if a consumer needs all-or-nothing.
 (4) `skip` trusts an existing file as completed prior output; a checksum-verified skip
-is future work. (5) Resource behavior is unmeasured - generated large-file benchmarks
-feeding real K8s requests/limits guidance are the next step now that the qpdf-backed
-engine is in. (6) An OOM-kill is a SIGKILL no in-process error boundary can catch; the
-workflow engine reports it itself - documented rather than handled. Next in line:
-container hardening (digest-pinned base, verified read-only rootfs, a shipped Argo
-`WorkflowTemplate` example) and merge bookmark/metadata carry-over.
+is future work. (5) Memory scales linearly with total input size: measured in-container
+(`scripts/benchmark.py`), peak process RSS is about total input bytes plus ~40 MB of
+fixed overhead, independent of file count - a 500 MB merge peaks near 530 MB, so
+multi-gigabyte merges need matching memory; sizing guidance is in
+[`OPERATIONS.md`](OPERATIONS.md). (6) An OOM-kill is a SIGKILL no in-process error
+boundary can catch; the workflow engine reports it itself - documented rather than
+handled. Next in line: container hardening (digest-pinned base, verified read-only
+rootfs, a shipped Argo `WorkflowTemplate` example) and merge bookmark/metadata
+carry-over.

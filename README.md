@@ -80,7 +80,8 @@ repeated path is almost always a templating bug that would silently duplicate co
 ## Path conventions and output behavior
 
 The full behavior contract - mounts and permissions, password semantics, output
-encryption, atomic writes, the existing-output policy, and attachment-name safety -
+encryption, atomic writes, the existing-output policy, attachment-name safety, and
+resource sizing -
 lives in [`docs/OPERATIONS.md`](docs/OPERATIONS.md). The short version: everything is
 mounted volumes with absolute in-container paths, the container runs as non-root UID
 10001, outputs are written atomically (a complete file or nothing), and

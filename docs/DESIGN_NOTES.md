@@ -357,3 +357,40 @@ another target's temps - and a run's own planned outputs are structurally exclud
 cleanup, which happens entirely before the first write. Merge's `skip` short-circuit
 reads nothing at all: not the inputs, and not the mounted password file (secrets resolve
 lazily, after the skip decision).
+
+## 10. Resource behavior (measured 2026-09-03)
+
+Method: `scripts/benchmark.py` generates large fixtures (incompressible random
+bytes in uncompressed streams, so sizes are honest; never committed) and runs
+each scenario through the real container image under a small wrapper that
+reports both the operation process's peak RSS (`ru_maxrss`) and the cgroup's
+`memory.peak` - the number Kubernetes actually meters, which additionally
+counts the reclaimable page cache the run touched. Environment: Docker Desktop
+on an Apple Silicon host; durations are indicative, the memory profile is
+structural.
+
+| Scenario | Duration | Peak process RSS | Peak cgroup memory |
+|---|---|---|---|
+| merge 2 x 5 MB (baseline) | 0.05 s | ~36 MB | ~51 MB |
+| merge 2 x 250 MB | 1.8 s | ~529 MB | ~1519 MB |
+| merge 20 x 25 MB | 1.2 s | ~531 MB | ~1515 MB |
+| merge 250 MB AES-256 in, re-encrypted out | 2.8 s | ~281 MB | ~779 MB |
+| extract 10 x 25 MB attachments | 0.5 s | ~333 MB | ~579 MB |
+
+Findings, in order of consequence:
+
+- **Peak process memory is linear in total input bytes** - roughly total input
+  size plus ~40 MB of fixed interpreter/library overhead - and indifferent to
+  how those bytes are split across files (2 x 250 MB and 20 x 25 MB profile
+  identically). The writer holds the copied stream data until `save()`
+  completes, so a merge effectively buffers one output's worth of content.
+  Multi-gigabyte merges therefore need matching memory; a streaming rewrite is
+  future work, noted rather than planned.
+- **Crypto costs time, not memory**: decrypt + AES-256 re-encrypt of 250 MB
+  added about a second and peaked at input size like any other run.
+- **The cgroup peak runs ~2-3x the process RSS** purely from page cache
+  (inputs read plus output written). Cache is reclaimable under memory
+  pressure, so limits do not need to cover it - the sizing rule in
+  `OPERATIONS.md` (total expected input + 128 MB) is set against RSS.
+- OOM behavior is unchanged from section 2's taxonomy stance: exceeding the
+  limit is a SIGKILL, no terminal event, the workflow engine reports it.

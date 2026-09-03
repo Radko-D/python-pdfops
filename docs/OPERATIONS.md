@@ -84,6 +84,29 @@ is `never` is a hard configuration error.
   with zero attachments is a success with `attachments_extracted=0` unless
   `PDFOPS_FAIL_ON_NO_ATTACHMENTS` is set.
 
+## Resource sizing
+
+Measured in-container (`scripts/benchmark.py`, Docker Desktop on an Apple Silicon
+host - durations are indicative, the memory profile is structural):
+
+| Scenario | Duration | Peak process RSS | Peak cgroup memory |
+|---|---|---|---|
+| merge 2 x 5 MB (baseline) | 0.05 s | ~36 MB | ~51 MB |
+| merge 2 x 250 MB | 1.8 s | ~529 MB | ~1519 MB |
+| merge 20 x 25 MB | 1.2 s | ~531 MB | ~1515 MB |
+| merge 250 MB AES-256 in, re-encrypted out | 2.8 s | ~281 MB | ~779 MB |
+| extract 10 x 25 MB attachments | 0.5 s | ~333 MB | ~579 MB |
+
+The rule of thumb: **peak process memory is roughly the total input size plus
+~40 MB of fixed overhead**, and it depends on total bytes, not file count.
+Decrypt/re-encrypt adds CPU time (about a second per 250 MB here), not memory.
+The cgroup number runs higher because it also counts the page cache the run
+touched; that cache is reclaimable, so it does not need to fit under a memory
+limit. Practical Kubernetes guidance: set `requests.memory` and
+`limits.memory` to about **total expected input size + 128 MB**. A run that
+exceeds the limit is OOM-killed (SIGKILL) - no terminal event is emitted, and
+the workflow engine reports the kill itself.
+
 ## Log events
 
 One JSON object per line on stdout; stderr stays empty. Lifecycle events narrate
