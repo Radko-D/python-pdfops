@@ -148,6 +148,7 @@ fixed overhead, independent of file count - a 500 MB merge peaks near 530 MB, so
 multi-gigabyte merges need matching memory; sizing guidance is in
 [`OPERATIONS.md`](OPERATIONS.md). (6) An OOM-kill is a SIGKILL no in-process error
 boundary can catch; the workflow engine reports it itself - documented rather than
-handled. Next in line: container hardening (digest-pinned base, verified read-only
-rootfs, a shipped Argo `WorkflowTemplate` example) and merge bookmark/metadata
-carry-over.
+handled. The runtime image is a digest-pinned multi-stage build with no package
+installer, verified by a container test to run with a read-only root filesystem and
+no capabilities; `deploy/argo-example.yaml` ships the full posture. Next in line:
+merge bookmark/metadata carry-over.

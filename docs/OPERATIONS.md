@@ -15,6 +15,10 @@ output policies, and what the log stream carries. The short reference tables
 - Outputs get regular `open()`-style permissions (the container umask, `0644` by
   default), so a later step running as a different user can read them from a shared
   volume.
+- The image needs no writable root filesystem: every write lands in the output
+  mount, so `readOnlyRootFilesystem: true` (plus dropped capabilities and no
+  privilege escalation) works unmodified - a container test runs the golden merge
+  under exactly that posture.
 
 ## Passwords
 

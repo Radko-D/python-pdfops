@@ -394,3 +394,36 @@ Findings, in order of consequence:
   `OPERATIONS.md` (total expected input + 128 MB) is set against RSS.
 - OOM behavior is unchanged from section 2's taxonomy stance: exceeding the
   limit is a SIGKILL, no terminal event, the workflow engine reports it.
+
+## 11. Container hardening (2026-09-03)
+
+The image became production-shaped in one pass:
+
+- **Multi-stage build**: a uv build stage (pinned by digest) resolves the
+  lockfile into a self-contained virtualenv with compiled bytecode; the
+  runtime stage copies only that venv onto a digest-pinned `python:3.14-slim`
+  base. No uv, no caches, and no package installer ship - the base image's
+  own pip is uninstalled AND stdlib `ensurepip` is removed (its bundled
+  wheel would restore pip in one command), with a container test probing
+  both interpreters (the venv python cannot see base site-packages, so a
+  venv-only probe would be vacuous).
+- **Read-only root filesystem, proven not promised**: all writes go to the
+  output mount by design (temp files live in the destination directory for
+  rename atomicity, and pikepdf saves through our open handle), so the image
+  runs under `--read-only --cap-drop ALL --security-opt no-new-privileges`
+  unmodified - a container test executes the golden merge under exactly that
+  posture.
+- **`deploy/argo-example.yaml`**: a WorkflowTemplate wiring together
+  everything the docs describe - the security context (non-root 10001,
+  read-only rootfs, no capabilities, fsGroup for output writability), the
+  password as a mounted secret file, a retry expression covering exit 1 and
+  pod-level errors (an Error-phase node never produces an exit code - Argo
+  substitutes "-1" - so exit-code-only expressions silently skip the
+  lost-pod case they are usually written for) paired with
+  `PDFOPS_ON_EXISTS=skip`, and memory sized by the measured rule from
+  section 10.
+
+Considered and not taken: distroless/static bases (the pinned slim base with
+pip removed reaches most of the value while keeping a debuggable Python
+layout); image signing/SBOM (registry- and org-specific, noted as release
+engineering rather than image structure).

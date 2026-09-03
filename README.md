@@ -130,16 +130,22 @@ code:
 | 5 | no | the password will still be wrong |
 | 6 | usually no | output conflict/location - `DISK_FULL` is the judgment call (space may free up) |
 
-Argo example - retry only on unexpected errors, with `skip` making any retry after a
-lost-but-successful pod a free no-op:
+Argo example - retry unexpected errors (exit 1) and pod-level errors, which never
+produce an exit code (a lost pod reports "-1"); with `skip` in the environment, a
+retry after a lost-but-successful pod is a free no-op:
 
 ```yaml
 retryStrategy:
   limit: "3"
-  expression: "asInt(lastRetry.exitCode) == 1"
+  expression: >-
+    lastRetry.status == "Error" or asInt(lastRetry.exitCode) == 1
 # and in the container env:
 #   PDFOPS_ON_EXISTS: skip
 ```
+
+A complete `WorkflowTemplate` - security context, secret-mounted password,
+retry strategy, measured resource sizing - lives in
+[`deploy/argo-example.yaml`](deploy/argo-example.yaml).
 
 ## Development
 

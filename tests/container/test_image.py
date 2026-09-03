@@ -56,8 +56,9 @@ def docker_run(
     *,
     volumes: dict[Path, str] | None = None,
     entrypoint: list[str] | None = None,
+    extra_args: list[str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    cmd = ["docker", "run", "--rm"]
+    cmd = ["docker", "run", "--rm", *(extra_args or [])]
     for key, value in env.items():
         cmd += ["-e", f"{key}={value}"]
     for host, spec in (volumes or {}).items():
@@ -67,6 +68,11 @@ def docker_run(
     else:
         cmd.append(image)
     return subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+
+
+# The security posture the deploy example promises: read-only root
+# filesystem, no capabilities, no privilege escalation.
+HARDENED = ["--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges"]
 
 
 def test_invalid_config_exits_2_with_json_only_stdout(image: str) -> None:
@@ -203,3 +209,52 @@ def test_golden_encrypted_merge_with_mounted_password_file(image: str, mount_dir
 
     encrypt_dict = cast("Any", reader.trailer["/Encrypt"]).get_object()
     assert int(encrypt_dict["/V"]) == 5  # AES-256, not legacy RC4
+
+
+def test_hardened_run_read_only_rootfs(image: str, mount_dir: Path) -> None:
+    # The image must function under the deploy example's full security
+    # posture: nothing writable but the mounted output directory (work files
+    # live there by design, so a read-only root filesystem costs nothing).
+    in_dir = mount_dir / "in"
+    out_dir = mount_dir / "out"
+    in_dir.mkdir()
+    out_dir.mkdir()
+    out_dir.chmod(0o777)
+
+    writer = PdfWriter()
+    writer.add_blank_page(width=200, height=300)
+    with (in_dir / "a.pdf").open("wb") as handle:
+        writer.write(handle)
+
+    result = docker_run(
+        image,
+        {
+            "PDFOPS_OPERATION": "merge",
+            "PDFOPS_INPUTS": "/in/a.pdf",
+            "PDFOPS_OUTPUT": "/out/merged.pdf",
+        },
+        volumes={in_dir: "/in:ro", out_dir: "/out"},
+        extra_args=HARDENED,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stderr == ""
+    events = [json.loads(line) for line in result.stdout.strip().splitlines()]
+    assert events[-1]["event"] == "operation_complete"
+    assert (out_dir / "merged.pdf").exists()
+
+
+def test_runtime_image_has_no_package_installer(image: str) -> None:
+    # The runtime stage carries the locked virtualenv and nothing to mutate
+    # it with. Two probes, because the venv python structurally cannot see
+    # the base interpreter's site-packages: pip must be gone from the venv
+    # AND from the base install, and stdlib ensurepip (whose bundled wheel
+    # would restore pip in one command) must be gone with it.
+    probe = (
+        "import importlib.util, sys; "
+        "sys.exit(1 if importlib.util.find_spec('pip') "
+        "or importlib.util.find_spec('ensurepip') else 0)"
+    )
+    for interpreter in ("python", "/usr/local/bin/python3.14"):
+        result = docker_run(image, {}, entrypoint=[interpreter, "-c", probe])
+        assert result.returncode == 0, f"{interpreter}: " + result.stdout + result.stderr

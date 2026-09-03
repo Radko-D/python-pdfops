@@ -36,8 +36,9 @@ This document is the authoritative register of all architectural decisions for t
 | [`D-022`](#D-022) | 🟢 | reliability | Output files honor the process umask, not mkstemp's 0600 | 2026-09-02 | atomic_output re-chmods its temp file to 0666 & ~umask at creation: mkstemp's private 0600 would ride through os.replace onto the published output, leaving it unreadable by a downstream step running as a different UID on a shared volume. Invisible under Docker Desktop's ownership-mapping mounts, real on native Linux bind mounts - caught by CI on the first Linux-host run. | [`DESIGN_NOTES.md section 6`](DESIGN_NOTES.md) | - |
 | [`D-023`](#D-023) | 🟢 | pdf-engine | Engine swapped to pikepdf; pypdf demoted to dev-dependency test oracle | 2026-09-02 | engine_pikepdf.py (qpdf-backed) replaces engine_pypdf.py as the runtime engine, executing the D-002 plan: better large-file and corrupt-input behavior, native AES-256 (R=6 pinned). password_type user/owner/empty reporting survives via qpdf's password-matched flags; qpdf repairs light damage pypdf refused (pinned as behavior; warnings surface as events - at open via OpenedInput.warnings, after lazy reads/writes via collect_warnings); duplicate attachment names preserved by walking /Names/EmbeddedFiles directly with cycle and type guards (hostile shapes degrade or classify as data problems, never exit 1); the merged output is saved through the atomic layer's open temp file, keeping the single-temp cleanup contract; failed-open algorithm labels come from a best-effort raw /Encrypt scan. pypdf stays in the dev group building fixtures and verifying outputs - every test is a cross-library check. | [`DESIGN_NOTES.md section 1`](DESIGN_NOTES.md) | - |
 | [`D-024`](#D-024) | 🟢 | security | Secrets stay stdlib, consolidated into one module | 2026-09-03 | All secret handling (Secret wrapper, EnvSecret/FileSecret source refs with resolve()/describe(), Secrets bundle, scrub registration) consolidated into secrets.py; config.py only parses which source is configured. Shelf options evaluated and rejected: pydantic SecretStr (compiled dependency for one masked-repr class), pydantic-settings (config-layer rewrite; secrets_dir expects field-named files in a fixed directory - a different contract from PDFOPS_PASSWORD_FILE=<any path>; ValidationError would need retranslation into the error_code taxonomy), scanner-style log redactors (pattern heuristics, weaker than the exact-value field-restricted scrub that avoids the password-oracle problem). | [`DESIGN_NOTES.md section 8`](DESIGN_NOTES.md) | - |
+| [`D-025`](#D-025) | 🟢 | container | Hardened runtime image: digest-pinned multi-stage build, read-only rootfs | 2026-09-03 | The image is a two-stage build: a digest-pinned uv stage resolves the lockfile into a self-contained virtualenv with compiled bytecode; the runtime stage (digest-pinned python:3.14-slim) carries only that venv, uninstalls the base image's pip, removes stdlib ensurepip (its bundled wheel would restore pip in one command), and runs as fixed non-root UID 10001. Read-only root filesystem is proven by a container test running the golden merge under --read-only --cap-drop ALL --security-opt no-new-privileges (all writes land in the output mount by design). deploy/argo-example.yaml ships the full posture incl. fsGroup, secret-mounted password, a retry expression covering exit 1 plus pod-level Error nodes (which carry no exit code), and memory sized by the measured input+128MB rule. Distroless bases considered and not taken: pinned slim minus pip reaches most of the value while staying debuggable. | [`DESIGN_NOTES.md section 11`](DESIGN_NOTES.md) | - |
 
-**Counts:** 24 total decisions - 19 🟢 decided, 0 🟡 pending, 3 ⏸ deferred, 2 🔵 superseded.
+**Counts:** 25 total decisions - 20 🟢 decided, 0 🟡 pending, 3 ⏸ deferred, 2 🔵 superseded.
 
 ### Index by area
 
@@ -51,8 +52,9 @@ This document is the authoritative register of all architectural decisions for t
 | security | 5 | D-013, D-014, D-017, D-019, D-024 |
 | reliability | 3 | D-010, D-021, D-022 |
 | observability | 1 | D-005 |
+| container | 1 | D-025 |
 | project | 1 | D-001 |
-| **Total** | **24** | |
+| **Total** | **25** | |
 
 ### Open decisions (🟡 Pending + ⏸ Deferred)
 
@@ -352,6 +354,17 @@ Per-decision details: status, decided date, rationale, related decisions, and th
 - **Risk:** low
 - **Reversibility:** cheap
 - **Where:** [`DESIGN_NOTES.md section 8`](DESIGN_NOTES.md)
+
+<a id="D-025"></a>
+### D-025
+- **Title:** Hardened runtime image: digest-pinned multi-stage build, read-only rootfs
+- **Status:** 🟢 Decided
+- **Area:** container
+- **Decided on:** 2026-09-03
+- **Summary:** The image is a two-stage build: a digest-pinned uv stage resolves the lockfile into a self-contained virtualenv with compiled bytecode; the runtime stage (digest-pinned python:3.14-slim) carries only that venv, uninstalls the base image's pip, removes stdlib ensurepip (its bundled wheel would restore pip in one command), and runs as fixed non-root UID 10001. Read-only root filesystem is proven by a container test running the golden merge under --read-only --cap-drop ALL --security-opt no-new-privileges (all writes land in the output mount by design). deploy/argo-example.yaml ships the full posture incl. fsGroup, secret-mounted password, a retry expression covering exit 1 plus pod-level Error nodes (which carry no exit code), and memory sized by the measured input+128MB rule. Distroless bases considered and not taken: pinned slim minus pip reaches most of the value while staying debuggable.
+- **Risk:** low
+- **Reversibility:** cheap
+- **Where:** [`DESIGN_NOTES.md section 11`](DESIGN_NOTES.md)
 
 ---
 

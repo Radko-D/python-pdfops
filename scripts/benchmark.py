@@ -79,8 +79,17 @@ def make_attachment_carrier(path: Path, count: int, each_mb: int) -> None:
     pdf = pikepdf.Pdf.new()
     pdf.add_blank_page(page_size=(612, 792))
     for index in range(count):
-        spec = pikepdf.AttachedFileSpec(pdf, os.urandom(each_mb * MB))
-        pdf.attachments[f"payload-{index:02d}.bin"] = spec
+        name = f"payload-{index:02d}.bin"
+        spec = pikepdf.AttachedFileSpec(
+            pdf,
+            os.urandom(each_mb * MB),
+            description="benchmark payload",
+            filename=name,
+            mime_type="application/octet-stream",
+            creation_date="",
+            mod_date="",
+        )
+        pdf.attachments[name] = spec
     pdf.save(path)
 
 

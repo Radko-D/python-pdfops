@@ -1,0 +1,67 @@
+# Argo Workflows example: pdf-ops as a single workflow step.
+#
+# What this template encodes:
+# - the full security posture the image is tested against (read-only root
+#   filesystem, non-root UID 10001, no capabilities, no privilege escalation);
+# - fsGroup so the output volume is writable by the container UID;
+# - the password arriving as a mounted secret file, never as an env value;
+# - retryStrategy that retries exit 1 (the one nondeterministic class; see
+#   the exit-code table in the README) and pod-level errors, which never
+#   produce an exit code (Argo reports "-1") - the lost-pod case. Paired
+#   with PDFOPS_ON_EXISTS=skip, a retry after a lost-but-successful pod is
+#   a free no-op;
+# - memory sized by the measured rule of thumb: total expected input size
+#   plus 128 MB (see docs/OPERATIONS.md, "Resource sizing").
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: pdf-ops-merge
+spec:
+  entrypoint: merge
+  securityContext:
+    fsGroup: 10001
+  volumes:
+    - name: documents
+      persistentVolumeClaim:
+        claimName: documents # the shared volume carrying inputs and outputs
+    - name: pdf-password
+      secret:
+        secretName: pdf-password # key "password" -> file /secrets/password
+  templates:
+    - name: merge
+      retryStrategy:
+        limit: "3"
+        expression: >-
+          lastRetry.status == "Error" or asInt(lastRetry.exitCode) == 1
+      container:
+        image: pdf-ops:latest # replace with your registry reference
+        env:
+          - name: PDFOPS_OPERATION
+            value: merge
+          - name: PDFOPS_INPUTS
+            value: /data/in/a.pdf:/data/in/b.pdf
+          - name: PDFOPS_OUTPUT
+            value: /data/out/merged.pdf
+          - name: PDFOPS_ON_EXISTS
+            value: skip
+          - name: PDFOPS_PASSWORD_FILE
+            value: /secrets/password
+        resources:
+          requests:
+            memory: 640Mi # ~500 MB of inputs + 128 MB headroom
+            cpu: 500m
+          limits:
+            memory: 640Mi
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 10001
+          readOnlyRootFilesystem: true
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: [ALL]
+        volumeMounts:
+          - name: documents
+            mountPath: /data
+          - name: pdf-password
+            mountPath: /secrets
+            readOnly: true
