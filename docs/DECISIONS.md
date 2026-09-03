@@ -18,9 +18,9 @@ This document is the authoritative register of all architectural decisions for t
 | [`D-004`](#D-004) | 🟢 | config | Env contract: PDFOPS_ prefix, fail-fast pure parsing, unknown-var rejection | 2026-08-31 | All config from PDFOPS_* env vars parsed by a pure function over Mapping[str,str] before any file is touched; os.environ only in __main__. Unknown PDFOPS_* vars are rejected as probable typos (exit 2 UNKNOWN_VAR); empty equals missing. | [`DESIGN_NOTES.md section 3`](DESIGN_NOTES.md) | - |
 | [`D-005`](#D-005) | 🟢 | observability | Observability: JSON-lines on stdout via stdlib logging | 2026-08-31 | One JSON object per line on stdout (workflow engine captures step logs); stable event tokens with structured fields; exactly one terminal event per run from the single error boundary. Stdlib logging with a small formatter - no structlog/OTel dependency. | [`DESIGN_NOTES.md section 4`](DESIGN_NOTES.md) | - |
 | [`D-006`](#D-006) | 🔵 | error-handling | Transient exit-code band (10+) for retryable failures | 2026-08-31 | Deferred (2026-08-31): the 0-6 map stands as-is with exit 1 the only maybe-retryable code. A dedicated 10+ transient band (e.g. transient I/O) would let Argo retryStrategy expressions retry precisely; revisit when retry semantics become load-bearing. | [`DESIGN_NOTES.md section 2`](DESIGN_NOTES.md) | - |
-| [`D-007`](#D-007) | ⏸ | config | PDFOPS_INPUTS list separator | 2026-08-31 | Deferred (2026-08-31): the merge implementation ships the recommended default - os.pathsep (colon) with explicit ordered paths, no globs - as provisional. Alternatives (comma, newline, JSON array) parked; revisit if colon-in-path or workflow-templating friction appears. | [`DESIGN_NOTES.md section 3`](DESIGN_NOTES.md) | - |
-| [`D-008`](#D-008) | ⏸ | config | Operation value case strictness | 2026-08-31 | Deferred (2026-08-31): strict lowercase merge/extract (whitespace tolerated) stands as implemented. Case-insensitive acceptance parked; revisit at README/contract freeze or on operator feedback. | [`DESIGN_NOTES.md section 3`](DESIGN_NOTES.md) | - |
-| [`D-009`](#D-009) | ⏸ | config | Unknown PDFOPS_* variable hard rejection | 2026-08-31 | Deferred (2026-08-31): hard rejection (exit 2 UNKNOWN_VAR) stands as implemented. Softening to a warning parked; revisit if a platform legitimately injects foreign PDFOPS_* vars (e.g. when the deployment example is written). | [`DESIGN_NOTES.md section 3`](DESIGN_NOTES.md) | - |
+| [`D-007`](#D-007) | 🟢 | config | PDFOPS_INPUTS list separator | 2026-09-03 | Settled (2026-09-03, deferred since 2026-08-31): os.pathsep (colon) with explicit ordered paths and no globs stands. It survived the container suite, the deployment example, and every walkthrough; colon-in-path never materialized and is pathological for mounted paths anyway (documented limitation). Alternatives (comma, newline, JSON array) rejected as churn without a driving case. | [`DESIGN_NOTES.md section 3`](DESIGN_NOTES.md) | - |
+| [`D-008`](#D-008) | 🟢 | config | Operation value case strictness | 2026-09-03 | Settled (2026-09-03, deferred since 2026-08-31): strict lowercase merge/extract (whitespace tolerated) stands. Operation values come from workflow templates, not humans typing - case tolerance would add contract surface without value, and the error message already names the accepted values. | [`DESIGN_NOTES.md section 3`](DESIGN_NOTES.md) | - |
+| [`D-009`](#D-009) | 🟢 | config | Unknown PDFOPS_* variable hard rejection | 2026-09-03 | Settled (2026-09-03, deferred since 2026-08-31): hard rejection (exit 2 UNKNOWN_VAR) stands. The revisit trigger - a platform injecting foreign PDFOPS_* variables - was tested by writing the deployment example, which injects none; typo protection keeps outweighing a hypothetical soft mode. | [`DESIGN_NOTES.md section 3`](DESIGN_NOTES.md) | - |
 | [`D-010`](#D-010) | 🟢 | reliability | Atomic output writes: temp file in destination dir + os.replace | 2026-08-31 | All output goes to a temp file in the destination directory (same filesystem), is fsynced, and is renamed over the final path in one step; the final path holds a complete PDF or nothing. Existing output refused (OUTPUT_EXISTS) until the overwrite/skip policy lands; missing output dir refused, never auto-created. | [`DESIGN_NOTES.md section 6`](DESIGN_NOTES.md) | - |
 | [`D-011`](#D-011) | 🟢 | pdf-engine | Merge is pages-only; input attachments/bookmarks/metadata not carried | 2026-08-31 | The merged output carries pages only: bookmarks, form fields, metadata, and embedded attachments of the inputs are not copied (no mainstream Python library copies /Names/EmbeddedFiles on merge - attachments would drop silently). Documented limitation; detect-and-warn vs fail-loud vs qpdf --copy-attachments-from evaluated when attachment handling is built out. | [`DESIGN_NOTES.md section 5`](DESIGN_NOTES.md) | - |
 | [`D-012`](#D-012) | 🟢 | error-handling | Merge input validation: collect-all, first problem sets exit class | 2026-08-31 | Every input is checked up front (exists, is a file, readable, %PDF- magic) before any write; all problems are reported in one failure event with the full list in context.problems, and the exit class follows the first problem in input order. Duplicate inputs are a hard config error; a single input is a valid merge. | [`DESIGN_NOTES.md section 6`](DESIGN_NOTES.md) | - |
@@ -38,7 +38,7 @@ This document is the authoritative register of all architectural decisions for t
 | [`D-024`](#D-024) | 🟢 | security | Secrets stay stdlib, consolidated into one module | 2026-09-03 | All secret handling (Secret wrapper, EnvSecret/FileSecret source refs with resolve()/describe(), Secrets bundle, scrub registration) consolidated into secrets.py; config.py only parses which source is configured. Shelf options evaluated and rejected: pydantic SecretStr (compiled dependency for one masked-repr class), pydantic-settings (config-layer rewrite; secrets_dir expects field-named files in a fixed directory - a different contract from PDFOPS_PASSWORD_FILE=<any path>; ValidationError would need retranslation into the error_code taxonomy), scanner-style log redactors (pattern heuristics, weaker than the exact-value field-restricted scrub that avoids the password-oracle problem). | [`DESIGN_NOTES.md section 8`](DESIGN_NOTES.md) | - |
 | [`D-025`](#D-025) | 🟢 | container | Hardened runtime image: digest-pinned multi-stage build, read-only rootfs | 2026-09-03 | The image is a two-stage build: a digest-pinned uv stage resolves the lockfile into a self-contained virtualenv with compiled bytecode; the runtime stage (digest-pinned python:3.14-slim) carries only that venv, uninstalls the base image's pip, removes stdlib ensurepip (its bundled wheel would restore pip in one command), and runs as fixed non-root UID 10001. Read-only root filesystem is proven by a container test running the golden merge under --read-only --cap-drop ALL --security-opt no-new-privileges (all writes land in the output mount by design). deploy/argo-example.yaml ships the full posture incl. fsGroup, secret-mounted password, a retry expression covering exit 1 plus pod-level Error nodes (which carry no exit code), and memory sized by the measured input+128MB rule. Distroless bases considered and not taken: pinned slim minus pip reaches most of the value while staying debuggable. | [`DESIGN_NOTES.md section 11`](DESIGN_NOTES.md) | - |
 
-**Counts:** 25 total decisions - 20 🟢 decided, 0 🟡 pending, 3 ⏸ deferred, 2 🔵 superseded.
+**Counts:** 25 total decisions - 23 🟢 decided, 0 🟡 pending, 0 ⏸ deferred, 2 🔵 superseded.
 
 ### Index by area
 
@@ -60,9 +60,7 @@ This document is the authoritative register of all architectural decisions for t
 
 | ID | Status | Owner / Trigger |
 |---|---|---|
-| [`D-007`](#D-007) | ⏸ Deferred | Post-merge review, or `:`-in-path / templating friction |
-| [`D-008`](#D-008) | ⏸ Deferred | Contract freeze, or mixed-case values seen in practice |
-| [`D-009`](#D-009) | ⏸ Deferred | Platform injecting foreign `PDFOPS_*` vars (deployment-example watch) |
+| _(none)_ | | |
 
 ### Decisions scheduled for revisit
 
@@ -150,37 +148,34 @@ Per-decision details: status, decided date, rationale, related decisions, and th
 <a id="D-007"></a>
 ### D-007
 - **Title:** PDFOPS_INPUTS list separator
-- **Status:** ⏸ Deferred
+- **Status:** 🟢 Decided
 - **Area:** config
-- **Decided on:** 2026-08-31
-- **Summary:** Deferred (2026-08-31): the merge implementation ships the recommended default - os.pathsep (colon) with explicit ordered paths, no globs - as provisional. Alternatives (comma, newline, JSON array) parked; revisit if colon-in-path or workflow-templating friction appears.
+- **Decided on:** 2026-09-03
+- **Summary:** Settled (2026-09-03, deferred since 2026-08-31): os.pathsep (colon) with explicit ordered paths and no globs stands. It survived the container suite, the deployment example, and every walkthrough; colon-in-path never materialized and is pathological for mounted paths anyway (documented limitation). Alternatives (comma, newline, JSON array) rejected as churn without a driving case.
 - **Risk:** low
 - **Reversibility:** expensive
-- **Phase trigger:** Post-merge review, or the first path containing `:` / workflow-templating friction with the provisional os.pathsep separator.
 - **Where:** [`DESIGN_NOTES.md section 3`](DESIGN_NOTES.md)
 
 <a id="D-008"></a>
 ### D-008
 - **Title:** Operation value case strictness
-- **Status:** ⏸ Deferred
+- **Status:** 🟢 Decided
 - **Area:** config
-- **Decided on:** 2026-08-31
-- **Summary:** Deferred (2026-08-31): strict lowercase merge/extract (whitespace tolerated) stands as implemented. Case-insensitive acceptance parked; revisit at README/contract freeze or on operator feedback.
+- **Decided on:** 2026-09-03
+- **Summary:** Settled (2026-09-03, deferred since 2026-08-31): strict lowercase merge/extract (whitespace tolerated) stands. Operation values come from workflow templates, not humans typing - case tolerance would add contract surface without value, and the error message already names the accepted values.
 - **Risk:** low
 - **Reversibility:** cheap
-- **Phase trigger:** README/contract freeze, or operator feedback that mixed-case operation values occur in practice.
 - **Where:** [`DESIGN_NOTES.md section 3`](DESIGN_NOTES.md)
 
 <a id="D-009"></a>
 ### D-009
 - **Title:** Unknown PDFOPS_* variable hard rejection
-- **Status:** ⏸ Deferred
+- **Status:** 🟢 Decided
 - **Area:** config
-- **Decided on:** 2026-08-31
-- **Summary:** Deferred (2026-08-31): hard rejection (exit 2 UNKNOWN_VAR) stands as implemented. Softening to a warning parked; revisit if a platform legitimately injects foreign PDFOPS_* vars (e.g. when the deployment example is written).
+- **Decided on:** 2026-09-03
+- **Summary:** Settled (2026-09-03, deferred since 2026-08-31): hard rejection (exit 2 UNKNOWN_VAR) stands. The revisit trigger - a platform injecting foreign PDFOPS_* variables - was tested by writing the deployment example, which injects none; typo protection keeps outweighing a hypothetical soft mode.
 - **Risk:** low
 - **Reversibility:** cheap
-- **Phase trigger:** A platform legitimately injecting foreign `PDFOPS_*` variables (watch when writing the deployment example).
 - **Where:** [`DESIGN_NOTES.md section 3`](DESIGN_NOTES.md)
 
 <a id="D-010"></a>

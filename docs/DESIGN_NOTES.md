@@ -103,7 +103,7 @@ Conventions:
 - Missing and empty values are treated identically (`MISSING_VAR`) - an empty value almost
   always means a broken template substitution upstream.
 - `PDFOPS_INPUTS` is an **explicit ordered list** (`os.pathsep`-separated - the `PATH`
-  convention; see deferred [D-007](DECISIONS.md#D-007)). No glob support, deliberately:
+  convention; per [D-007](DECISIONS.md#D-007)). No glob support, deliberately:
   merge order must be explicit, not lexicographic luck, or retries and re-runs can produce
   different documents. Duplicates are rejected (`DUPLICATE_INPUTS`). A single input is
   allowed - workflows fan in variable-length lists that can be of length one.

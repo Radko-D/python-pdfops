@@ -19,7 +19,27 @@ alternatives and status, live in the decision register at
 docker build -t pdf-ops .
 
 # The container runs as UID 10001 - the output dir must be writable by it
-mkdir -p in out && chmod 777 out
+mkdir -p in out secret && chmod 777 out
+
+# No PDFs at hand? Conjure the inputs the examples below use:
+uv sync && uv run python - <<'PY'
+from pypdf import PdfWriter
+for name, pages in (("a.pdf", 1), ("b.pdf", 2)):
+    w = PdfWriter()
+    for _ in range(pages):
+        w.add_blank_page(width=200, height=300)
+    with open(f"in/{name}", "wb") as h:
+        w.write(h)
+w = PdfWriter(); w.add_blank_page(width=200, height=300)
+w.add_attachment("data.csv", b"x,y\n1,2\n")
+with open("in/report.pdf", "wb") as h:
+    w.write(h)
+w = PdfWriter(); w.add_blank_page(width=200, height=300)
+w.encrypt(user_password="s3cret-pw", algorithm="AES-256")
+with open("in/locked.pdf", "wb") as h:
+    w.write(h)
+open("secret/pw", "w").write("s3cret-pw\n")
+PY
 
 # Merge two PDFs from a mounted input dir into a mounted output dir
 docker run --rm \
@@ -41,7 +61,7 @@ docker run --rm \
 docker run --rm \
   -v "$PWD/in:/in:ro" -v "$PWD/out:/out" -v "$PWD/secret:/secret:ro" \
   -e PDFOPS_OPERATION=merge \
-  -e PDFOPS_INPUTS=/in/locked.pdf:/in/plain.pdf \
+  -e PDFOPS_INPUTS=/in/locked.pdf:/in/a.pdf \
   -e PDFOPS_OUTPUT=/out/merged.pdf \
   -e PDFOPS_PASSWORD_FILE=/secret/pw \
   -e PDFOPS_OUTPUT_ENCRYPTION=inherit \
