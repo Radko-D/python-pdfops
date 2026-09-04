@@ -136,7 +136,7 @@ vocabulary: a test checks it against every event the code emits.
 
 | Event | Level | When, and what it carries |
 |---|---|---|
-| `config_loaded` | info | the parsed configuration: `operation`, `log_level`, `on_exists`, `output_encryption` (merge), and `password` / `output_password` as presence only (`unset` / `set(env)` / `set(file)`), never values |
+| `config_loaded` | info | the parsed configuration: `operation`, `log_level`, `on_exists`, and `password` as presence only (`unset` / `set(env)` / `set(file)`), never values; merge runs also carry `output_encryption` and `output_password` (presence only) |
 | `operation_started` | info | dispatch into merge or extract |
 | `input_opened` | info | per input: `input`, `pages`, `encrypted`, `algorithm`, `password_type` (`user` / `owner` / `empty`) |
 | `pdf_library_message` | warning, or the library's own higher level | `detail` and `source`: damage the engine repaired (`source: qpdf`), or anything the PDF library or a Python warning routes through logging - those records bypass `PDFOPS_LOG_LEVEL` |

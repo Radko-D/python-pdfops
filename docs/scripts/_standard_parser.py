@@ -57,14 +57,11 @@ ANCHOR_FIELD_RE = re.compile(r"^-\s*\*\*([^:]+):\*\*\s*(.*)$")
 # -----------------------------------------------------------------------------
 
 
-# Standard path resolution (v0.11.27): prefer --standard-path CLI arg if
-# provided, fall back to relative-to-script default. The default resolves
-# correctly when this script lives at docs/scripts/ in a scaffolded project
-# (parent.parent -> docs/). When invoked from skill-side
-# (~/.claude/skills/init-decisions/templates/), the default fails because
-# the standard isn't co-located - pass --standard-path explicitly. The arg
-# unblocks verify-framework Ability's documented CLI invocation against
-# legacy projects whose docs/scripts/ doesn't have a copy of this script.
+# Standard path resolution: prefer the --standard-path CLI arg when given,
+# fall back to the relative-to-script default. The default resolves
+# correctly when this script lives at docs/scripts/ next to the standard
+# (parent.parent -> docs/); a copy running from anywhere else must pass
+# --standard-path explicitly because the standard is not co-located.
 def _resolve_standard_path() -> Path:
     import sys
 
@@ -135,7 +132,7 @@ def _load() -> dict[str, frozenset[str]]:
     if not STANDARD_PATH.exists():
         _abort(
             "DECISION_TRACKING_STANDARD.md not found - required for vocabulary parsing. "
-            "Run /init-decisions to scaffold it."
+            "It belongs next to DECISIONS.md in docs/."
         )
     text = STANDARD_PATH.read_text(encoding="utf-8")
     sections = _parse_vocab_sections(text)
