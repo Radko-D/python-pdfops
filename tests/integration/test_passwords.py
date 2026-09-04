@@ -6,8 +6,6 @@ appear in ANY output the process produces, on any path - success, failure,
 or crash.
 """
 
-from __future__ import annotations
-
 from collections.abc import Callable
 from pathlib import Path
 
@@ -17,8 +15,8 @@ from pypdf import PdfReader
 import pdf_ops.merge
 from pdf_ops.engine import OpenedInput
 from pdf_ops.main import run
-from pdf_ops.secret import Secret
-from tests.conftest import RunApp
+from pdf_ops.secrets import Secret
+from tests.helpers import RunApp, build_raw_pdf
 from tests.integration.test_extract import extract_env
 from tests.integration.test_merge import merge_env
 
@@ -103,7 +101,9 @@ class TestMergePasswords:
         terminal = events[-1]
         assert terminal["error_code"] == "WRONG_PASSWORD"
         assert terminal["context"]["input"] == str(locked)
-        assert terminal["context"]["algorithm"].startswith("RC4")
+        # exact label: the failed-open scan must find the real /Encrypt
+        # object, not the first /Length token some stream happens to carry
+        assert terminal["context"]["algorithm"] == "RC4-128"
         assert not output.exists()
 
     def test_no_password_on_user_locked_input(
@@ -113,6 +113,39 @@ class TestMergePasswords:
         code, events = run_app(merge_env([locked], out_dir / "m.pdf"))
         assert code == 5
         assert events[-1]["error_code"] == "PASSWORD_REQUIRED"
+
+    def test_certificate_encryption_reports_unsupported(
+        self, tmp_path: Path, out_dir: Path, run_app: RunApp
+    ) -> None:
+        # Certificate security handlers are out of scope; the operator remedy
+        # (a certificate and key) is neither a password nor a repair, so the
+        # classification must stay in the password class - never corrupt, and
+        # never a retryable internal error.
+        locked = tmp_path / "cert.pdf"
+        raw = build_raw_pdf(
+            [
+                "<< /Type /Catalog /Pages 2 0 R >>",
+                "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 300] >>",
+                b"<< /Filter /Adobe.PubSec /SubFilter /adbe.pkcs7.s5 /V 5 /R 6 >>",
+            ]
+        )
+        locked.write_bytes(raw.replace(b"/Root 1 0 R", b"/Root 1 0 R /Encrypt 4 0 R"))
+        code, events = run_app(merge_env([locked], out_dir / "m.pdf"))
+        assert code == 5
+        assert events[-1]["error_code"] == "UNSUPPORTED_ENCRYPTION"
+
+    def test_password_required_still_reports_aes256_algorithm(
+        self, make_encrypted_pdf: Callable[..., Path], out_dir: Path, run_app: RunApp
+    ) -> None:
+        # When the file cannot be opened at all, the algorithm label comes
+        # from a raw scan of the plaintext /Encrypt dictionary - the
+        # observability must not disappear exactly when the operator needs it.
+        locked = make_encrypted_pdf(password=PW, algorithm="AES-256")
+        code, events = run_app(merge_env([locked], out_dir / "m.pdf"))
+        assert code == 5
+        assert events[-1]["error_code"] == "PASSWORD_REQUIRED"
+        assert events[-1]["context"]["algorithm"] == "AES-256"
 
     def test_owner_only_file_opens_without_password(
         self, make_encrypted_pdf: Callable[..., Path], out_dir: Path, run_app: RunApp
@@ -337,7 +370,9 @@ class TestNoLeak:
             def open_input(self, path: Path, password: Secret | None) -> OpenedInput:
                 raise RuntimeError(f"login failed for {password.reveal() if password else ''}")
 
-            def merge_to(self, inputs: object, destination: Path, output_password: object) -> None:
+            def merge_to(
+                self, inputs: object, destination: Path, output_password: object
+            ) -> list[str]:
                 raise AssertionError("unreachable")
 
             def list_attachments(self, opened: object) -> list[object]:
@@ -456,6 +491,31 @@ class TestReviewHardening:
         code, events = run_app(merge_env([owner_only], out_dir / "m.pdf"))
         assert code == 0
         assert any(e["event"] == "security_downgrade" for e in events)
+
+    def test_both_secrets_bad_reports_the_input_password_first(
+        self,
+        make_pdf: Callable[..., Path],
+        tmp_path: Path,
+        out_dir: Path,
+        run_app: RunApp,
+    ) -> None:
+        # The input password resolves before the output password, so a run
+        # where both sources are broken names the primary secret's problem.
+        empty_pw = tmp_path / "empty-pw"
+        empty_pw.write_text("")
+        missing_out_pw = tmp_path / "gone-pw"
+        plain = make_pdf()
+        env = merge_env(
+            [plain],
+            out_dir / "m.pdf",
+            PDFOPS_PASSWORD_FILE=str(empty_pw),
+            PDFOPS_OUTPUT_ENCRYPTION="always",
+            PDFOPS_OUTPUT_PASSWORD_FILE=str(missing_out_pw),
+        )
+        code, events = run_app(env)
+        assert code == 2
+        assert events[-1]["error_code"] == "EMPTY_PASSWORD"
+        assert events[-1]["context"]["path"] == str(empty_pw)
 
     def test_short_password_degrades_redaction_with_warning(
         self, make_encrypted_pdf: Callable[..., Path], out_dir: Path, run_app: RunApp

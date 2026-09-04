@@ -7,8 +7,6 @@ must fail fast with exit code 2. Deliberately filesystem-free: existence and
 readability of paths are operation-stage concerns, not configuration ones.
 """
 
-from __future__ import annotations
-
 import logging
 import os
 from collections.abc import Mapping
@@ -17,8 +15,8 @@ from enum import StrEnum
 from pathlib import Path
 from typing import ClassVar, Literal
 
-from pdf_ops.errors import ConfigError
-from pdf_ops.secret import Secret
+from pdf_ops.errors import ConfigError, ErrorCode
+from pdf_ops.secrets import EnvSecret, FileSecret, Secret, SecretRef
 
 ENV_PREFIX = "PDFOPS_"
 
@@ -110,24 +108,6 @@ class OutputEncryption(StrEnum):
 
 
 @dataclass(frozen=True, slots=True)
-class EnvSecret:
-    """A secret supplied directly in an environment variable."""
-
-    value: Secret
-
-
-@dataclass(frozen=True, slots=True)
-class FileSecret:
-    """A secret to be read from a mounted file (resolved after parsing -
-    the parser itself stays filesystem-free)."""
-
-    path: Path
-
-
-type SecretRef = EnvSecret | FileSecret
-
-
-@dataclass(frozen=True, slots=True)
 class MergeConfig:
     operation: ClassVar[Literal[Operation.MERGE]] = Operation.MERGE
     log_level: int
@@ -196,7 +176,7 @@ def _reject_unknown_vars(env: Mapping[str, str]) -> None:
         raise ConfigError(
             f"unknown environment variable(s): {', '.join(unknown)}; "
             f"accepted: {', '.join(sorted(KNOWN_VARS))}",
-            error_code="UNKNOWN_VAR",
+            error_code=ErrorCode.UNKNOWN_VAR,
             context={"unknown_vars": unknown},
         )
 
@@ -213,7 +193,7 @@ def _reject_inapplicable_vars(
     if present:
         raise ConfigError(
             f"variable(s) not applicable to operation '{operation.value}': {', '.join(present)}",
-            error_code="INAPPLICABLE_VAR",
+            error_code=ErrorCode.INAPPLICABLE_VAR,
             context={"operation": operation.value, "inapplicable_vars": present},
         )
 
@@ -223,7 +203,7 @@ def _parse_operation(env: Mapping[str, str]) -> Operation:
     if not raw:
         raise ConfigError(
             f"{VAR_OPERATION} is required (accepted values: merge, extract)",
-            error_code="MISSING_VAR",
+            error_code=ErrorCode.MISSING_VAR,
             context={"var": VAR_OPERATION},
         )
     try:
@@ -231,7 +211,7 @@ def _parse_operation(env: Mapping[str, str]) -> Operation:
     except ValueError:
         raise ConfigError(
             f"{VAR_OPERATION} has invalid value {raw!r} (accepted values: merge, extract)",
-            error_code="INVALID_OPERATION",
+            error_code=ErrorCode.INVALID_OPERATION,
             context={"var": VAR_OPERATION, "value": raw},
         ) from None
 
@@ -245,7 +225,7 @@ def _parse_log_level(env: Mapping[str, str]) -> int:
         raise ConfigError(
             f"{VAR_LOG_LEVEL} has invalid value {raw!r} "
             f"(accepted values: {', '.join(_LOG_LEVELS).lower()}, case-insensitive)",
-            error_code="INVALID_LOG_LEVEL",
+            error_code=ErrorCode.INVALID_LOG_LEVEL,
             context={"var": VAR_LOG_LEVEL, "value": raw},
         )
     return level
@@ -257,7 +237,7 @@ def _parse_inputs(env: Mapping[str, str]) -> tuple[Path, ...]:
         raise ConfigError(
             f"{VAR_INPUTS} is required for merge "
             f"(ordered file paths separated by {INPUTS_SEPARATOR!r})",
-            error_code="MISSING_VAR",
+            error_code=ErrorCode.MISSING_VAR,
             context={"var": VAR_INPUTS},
         )
     parts = [part.strip() for part in raw.split(INPUTS_SEPARATOR)]
@@ -265,7 +245,7 @@ def _parse_inputs(env: Mapping[str, str]) -> tuple[Path, ...]:
         raise ConfigError(
             f"{VAR_INPUTS} contains an empty path component "
             f"(check for stray {INPUTS_SEPARATOR!r} separators)",
-            error_code="INVALID_INPUTS",
+            error_code=ErrorCode.INVALID_INPUTS,
             context={"var": VAR_INPUTS, "value": raw},
         )
     paths = [Path(part) for part in parts]
@@ -280,7 +260,7 @@ def _parse_inputs(env: Mapping[str, str]) -> tuple[Path, ...]:
         duplicates = sorted({part for part in parts if Path(part) in duplicated_paths})
         raise ConfigError(
             f"{VAR_INPUTS} lists the same path more than once: {', '.join(duplicates)}",
-            error_code="DUPLICATE_INPUTS",
+            error_code=ErrorCode.DUPLICATE_INPUTS,
             context={"var": VAR_INPUTS, "duplicates": duplicates},
         )
     return tuple(paths)
@@ -291,7 +271,7 @@ def _parse_output(env: Mapping[str, str]) -> Path:
     if not raw:
         raise ConfigError(
             f"{VAR_OUTPUT} is required for merge (path of the output PDF)",
-            error_code="MISSING_VAR",
+            error_code=ErrorCode.MISSING_VAR,
             context={"var": VAR_OUTPUT},
         )
     return Path(raw)
@@ -302,7 +282,7 @@ def _parse_single_path(env: Mapping[str, str], var: str, purpose: str) -> Path:
     if not raw:
         raise ConfigError(
             f"{var} is required for extract ({purpose})",
-            error_code="MISSING_VAR",
+            error_code=ErrorCode.MISSING_VAR,
             context={"var": var},
         )
     return Path(raw)
@@ -317,7 +297,7 @@ def _parse_flag(env: Mapping[str, str], var: str, *, default: bool = False) -> b
         return normalized == "true"
     raise ConfigError(
         f"{var} has invalid value {raw!r} (accepted values: true, false, case-insensitive)",
-        error_code="INVALID_FLAG",
+        error_code=ErrorCode.INVALID_FLAG,
         context={"var": var, "value": raw},
     )
 
@@ -334,7 +314,7 @@ def _parse_secret_pair(env: Mapping[str, str], value_var: str, file_var: str) ->
     if raw_value and raw_file:
         raise ConfigError(
             f"{value_var} and {file_var} are mutually exclusive - supply one",
-            error_code="CONFLICTING_PASSWORD_SOURCES",
+            error_code=ErrorCode.CONFLICTING_PASSWORD_SOURCES,
             context={"vars": [value_var, file_var]},
         )
     if raw_value:
@@ -354,7 +334,7 @@ def _parse_on_exists(env: Mapping[str, str]) -> OnExists:
         raise ConfigError(
             f"{VAR_ON_EXISTS} has invalid value {raw!r} "
             "(accepted values: fail, overwrite, skip, case-insensitive)",
-            error_code="INVALID_ON_EXISTS",
+            error_code=ErrorCode.INVALID_ON_EXISTS,
             context={"var": VAR_ON_EXISTS, "value": raw},
         ) from None
 
@@ -369,7 +349,7 @@ def _parse_output_encryption(env: Mapping[str, str]) -> OutputEncryption:
         raise ConfigError(
             f"{VAR_OUTPUT_ENCRYPTION} has invalid value {raw!r} "
             "(accepted values: never, inherit, always, case-insensitive)",
-            error_code="INVALID_OUTPUT_ENCRYPTION",
+            error_code=ErrorCode.INVALID_OUTPUT_ENCRYPTION,
             context={"var": VAR_OUTPUT_ENCRYPTION, "value": raw},
         ) from None
 
@@ -383,94 +363,14 @@ def _parse_output_password(env: Mapping[str, str], password: SecretRef | None) -
         raise ConfigError(
             f"an output password is supplied but {VAR_OUTPUT_ENCRYPTION} is 'never' "
             "(set it to 'inherit' or 'always', or remove the output password)",
-            error_code="OUTPUT_PASSWORD_WITHOUT_ENCRYPTION",
+            error_code=ErrorCode.OUTPUT_PASSWORD_WITHOUT_ENCRYPTION,
             context={"var": VAR_OUTPUT_ENCRYPTION},
         )
     if mode is OutputEncryption.ALWAYS and output_password is None and password is None:
         raise ConfigError(
             f"{VAR_OUTPUT_ENCRYPTION}=always requires an output password "
             f"({VAR_OUTPUT_PASSWORD_FILE}/{VAR_OUTPUT_PASSWORD}) or an input password to fall back to",
-            error_code="MISSING_OUTPUT_PASSWORD",
+            error_code=ErrorCode.MISSING_OUTPUT_PASSWORD,
             context={"var": VAR_OUTPUT_ENCRYPTION},
         )
     return output_password
-
-
-def resolve_secret(ref: SecretRef | None) -> Secret | None:
-    """Materialize a secret reference; the one place secret file I/O happens.
-
-    A single trailing newline is stripped (hand-created secret files usually
-    have one; the password itself is otherwise taken byte-for-byte).
-    """
-    match ref:
-        case None:
-            return None
-        case EnvSecret(value=value):
-            _reject_control_characters(value.reveal(), "the environment")
-            return value
-        case FileSecret(path=path):
-            try:
-                raw = path.read_text(encoding="utf-8")
-            except OSError as err:
-                raise ConfigError(
-                    f"cannot read password file {path}: {err.strerror or err}",
-                    error_code="PASSWORD_FILE_UNREADABLE",
-                    context={"path": str(path)},
-                ) from err
-            except UnicodeDecodeError as err:
-                # Deliberately no decode detail: it would name a byte of the
-                # secret and its position.
-                raise ConfigError(
-                    f"password file {path} is not valid UTF-8 text",
-                    error_code="PASSWORD_FILE_UNREADABLE",
-                    context={"path": str(path)},
-                ) from err
-            raw = raw.removesuffix("\n").removesuffix("\r")
-            if not raw:
-                raise ConfigError(
-                    f"password file {path} is empty",
-                    error_code="EMPTY_PASSWORD",
-                    context={"path": str(path)},
-                )
-            _reject_control_characters(raw, str(path))
-            return Secret(raw)
-
-
-def _reject_control_characters(value: str, origin: str) -> None:
-    """A password containing control characters is almost certainly an
-    encoding or copy-paste accident - and downstream cryptographic
-    normalization (SASLprep) would warn about it, naming the codepoint."""
-    if any(ord(ch) < 32 or 0x7F <= ord(ch) <= 0x9F for ch in value):
-        raise ConfigError(
-            f"the password from {origin} contains control characters "
-            "(check for encoding or copy-paste issues)",
-            error_code="PASSWORD_UNSUPPORTED_CHARACTERS",
-            context={"source": origin},
-        )
-
-
-@dataclass(frozen=True, slots=True)
-class Secrets:
-    """Materialized secrets for one run, resolved from the config's refs."""
-
-    password: Secret | None
-    output_password: Secret | None
-
-
-def resolve_secrets(config: Config) -> Secrets:
-    """Read any file-based secrets; raises ConfigError on unreadable/empty files."""
-    output_password = (
-        resolve_secret(config.output_password) if isinstance(config, MergeConfig) else None
-    )
-    return Secrets(password=resolve_secret(config.password), output_password=output_password)
-
-
-def describe_secret(ref: SecretRef | None) -> str:
-    """Presence-only description for the config-echo log event."""
-    match ref:
-        case None:
-            return "unset"
-        case EnvSecret():
-            return "set(env)"
-        case FileSecret():
-            return "set(file)"

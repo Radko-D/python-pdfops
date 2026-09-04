@@ -1,25 +1,16 @@
 """Top-level orchestration: the single error boundary and operation dispatch."""
 
-from __future__ import annotations
-
 import logging
 import time
 from collections.abc import Callable, Mapping
 from typing import Any
 
-from pdf_ops.config import (
-    Config,
-    ExtractConfig,
-    MergeConfig,
-    Secrets,
-    describe_secret,
-    parse_config,
-    resolve_secrets,
-)
-from pdf_ops.errors import ExitCode, PdfOpsError
+from pdf_ops.config import Config, ExtractConfig, MergeConfig, parse_config
+from pdf_ops.errors import ErrorCode, ExitCode, PdfOpsError
 from pdf_ops.extract import run_extract
-from pdf_ops.logging_setup import emit_terminal, register_secret_value, setup_logging
+from pdf_ops.logging_setup import emit_terminal, setup_logging
 from pdf_ops.merge import run_merge
+from pdf_ops.secrets import Secrets, describe_secret, resolve_and_register
 
 
 def run(env: Mapping[str, str]) -> int:
@@ -41,17 +32,8 @@ def run(env: Mapping[str, str]) -> int:
             # Resolved lazily: merge's skip short-circuit must succeed even
             # when the mounted password file is already gone - a retry after
             # success reads nothing at all.
-            secrets = resolve_secrets(config)
-            for secret in (secrets.password, secrets.output_password):
-                if secret is not None and not register_secret_value(secret.reveal()):
-                    logger.warning(
-                        "redaction_degraded",
-                        extra={
-                            "detail": "a supplied secret is too short for defense-in-depth "
-                            "log scrubbing; the structural no-leak layers still apply"
-                        },
-                    )
-            return secrets
+            output_ref = config.output_password if isinstance(config, MergeConfig) else None
+            return resolve_and_register(config.password, output_ref, logger)
 
         logger.info("config_loaded", extra=_config_echo(config))
         result = _dispatch(config, get_secrets, logger)
@@ -87,7 +69,7 @@ def run(env: Mapping[str, str]) -> int:
             logging.ERROR,
             "operation_failed",
             {
-                "error_code": "UNEXPECTED_ERROR",
+                "error_code": ErrorCode.UNEXPECTED_ERROR,
                 "exit_code": int(ExitCode.UNEXPECTED),
                 "duration_s": round(time.monotonic() - started, 3),
             },

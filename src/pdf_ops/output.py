@@ -7,18 +7,19 @@ renamed over in one step, so a crashed or failed run never leaves a partial
 PDF where a downstream workflow step could read it.
 """
 
-from __future__ import annotations
-
 import errno
 import os
 import tempfile
 from collections.abc import Generator
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from pathlib import Path
-from typing import NoReturn
+from typing import Literal, NoReturn
 
 from pdf_ops.config import OnExists
-from pdf_ops.errors import OutputError
+from pdf_ops.errors import ErrorCode, OutputError
+
+# What check_output_path decided for an existing-output policy.
+type OutputAction = Literal["proceed", "skip", "overwrite"]
 
 
 def check_output_dir(directory: Path) -> None:
@@ -27,12 +28,12 @@ def check_output_dir(directory: Path) -> None:
         raise OutputError(
             f"output directory {directory} does not exist "
             "(output locations are mounted; a missing directory is a workflow bug)",
-            error_code="OUTPUT_DIR_MISSING",
+            error_code=ErrorCode.OUTPUT_DIR_MISSING,
             context={"output_dir": str(directory)},
         )
 
 
-def check_output_path(path: Path, on_exists: OnExists) -> str:
+def check_output_path(path: Path, on_exists: OnExists) -> OutputAction:
     """Fail fast on unusable output locations, before any work is done.
 
     Returns the resolved action: ``"proceed"`` (no conflict), ``"skip"``
@@ -44,7 +45,7 @@ def check_output_path(path: Path, on_exists: OnExists) -> str:
         raise OutputError(
             f"output directory {parent} does not exist "
             "(output locations are mounted; a missing directory is a workflow bug)",
-            error_code="OUTPUT_DIR_MISSING",
+            error_code=ErrorCode.OUTPUT_DIR_MISSING,
             context={"output": str(path)},
         )
     if path.is_dir() and not path.is_symlink():
@@ -52,7 +53,7 @@ def check_output_path(path: Path, on_exists: OnExists) -> str:
         # work and os.replace cannot atomically replace a directory.
         raise OutputError(
             f"output path {path} is a directory",
-            error_code="OUTPUT_IS_DIRECTORY",
+            error_code=ErrorCode.OUTPUT_IS_DIRECTORY,
             context={"output": str(path)},
         )
     if not (path.is_symlink() or path.exists()):
@@ -68,7 +69,7 @@ def check_output_path(path: Path, on_exists: OnExists) -> str:
     raise OutputError(
         f"output {path} already exists (refusing to overwrite; "
         "set PDFOPS_ON_EXISTS to overwrite or skip for retry semantics)",
-        error_code="OUTPUT_EXISTS",
+        error_code=ErrorCode.OUTPUT_EXISTS,
         context={"output": str(path)},
     )
 
@@ -128,7 +129,7 @@ def atomic_output(path: Path) -> Generator[Path]:
         yield tmp_path
         with tmp_path.open("rb") as handle:
             os.fsync(handle.fileno())
-        os.replace(tmp_path, path)
+        tmp_path.replace(path)
         _fsync_dir(path.parent)
     except OSError as err:
         _cleanup(tmp_path)
@@ -154,23 +155,21 @@ def _translate_os_error(err: OSError, path: Path) -> Exception:
     if err.errno == errno.ENOSPC:
         return OutputError(
             f"no space left on device while writing {path}",
-            error_code="DISK_FULL",
+            error_code=ErrorCode.DISK_FULL,
             context={"output": str(path)},
         )
     if err.errno in (errno.EACCES, errno.EPERM, errno.EROFS):
         return OutputError(
             f"output location {path} is not writable",
-            error_code="OUTPUT_NOT_WRITABLE",
+            error_code=ErrorCode.OUTPUT_NOT_WRITABLE,
             context={"output": str(path)},
         )
     return err
 
 
 def _cleanup(tmp_path: Path) -> None:
-    try:
+    with suppress(OSError):  # best effort - never mask the original failure
         tmp_path.unlink(missing_ok=True)
-    except OSError:  # best effort - never mask the original failure
-        pass
 
 
 def _fsync_dir(directory: Path) -> None:

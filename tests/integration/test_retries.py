@@ -5,8 +5,6 @@ Workflow engines are at-least-once: every scenario here is some flavor of
 "the step ran before - what does running it again do?"
 """
 
-from __future__ import annotations
-
 from collections.abc import Callable
 from pathlib import Path
 
@@ -14,8 +12,8 @@ import pytest
 from pypdf import PdfReader
 
 import pdf_ops.merge
-from pdf_ops.errors import InvalidPdfError
-from tests.conftest import RunApp
+from pdf_ops.errors import ErrorCode, InvalidPdfError
+from tests.helpers import RunApp
 from tests.integration.test_extract import extract_env
 from tests.integration.test_merge import FakeEngine, merge_env
 
@@ -304,7 +302,9 @@ class TestOverwriteAtomicity:
         assert run_app(merge_env([source], output))[0] == 0
         original = output.read_bytes()
 
-        fake_engine(InvalidPdfError("boom mid-rewrite", error_code="CORRUPT_PDF", context={}))
+        fake_engine(
+            InvalidPdfError("boom mid-rewrite", error_code=ErrorCode.CORRUPT_PDF, context={})
+        )
         code, _ = run_app(merge_env([source], output, PDFOPS_ON_EXISTS="overwrite"))
 
         assert code == 4

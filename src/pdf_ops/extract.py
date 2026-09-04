@@ -6,17 +6,16 @@ designed for exhaustive table testing - and the resolved target of every
 write is verified to stay inside the output directory.
 """
 
-from __future__ import annotations
-
 import logging
 from dataclasses import dataclass
 from typing import Any
 
-from pdf_ops.config import ExtractConfig, OnExists, Secrets
+from pdf_ops.config import ExtractConfig, OnExists
 from pdf_ops.engine import Attachment, get_engine
-from pdf_ops.errors import InputError, OutputError
-from pdf_ops.merge import validate_inputs
+from pdf_ops.errors import ErrorCode, InputError, OutputError
+from pdf_ops.inputs import validate_inputs
 from pdf_ops.output import atomic_output, check_output_dir, clean_stale_temps
+from pdf_ops.secrets import Secrets
 
 # Filesystem NAME_MAX is 255 bytes on the relevant filesystems; leave room
 # for collision suffixes and the atomic-write temp prefix.
@@ -31,16 +30,9 @@ def run_extract(config: ExtractConfig, secrets: Secrets, logger: logging.Logger)
 
     engine = get_engine()
     opened = engine.open_input(config.input, secrets.password)
-    logger.info(
-        "input_opened",
-        extra={
-            "input": str(config.input),
-            "pages": opened.pages,
-            "encrypted": opened.encrypted,
-            "algorithm": opened.algorithm,
-            "password_type": opened.password_type,
-        },
-    )
+    logger.info("input_opened", extra=opened.event_fields())
+    for message in opened.warnings:
+        logger.warning("pdf_library_message", extra={"detail": message, "source": "qpdf"})
     if secrets.password is not None and not opened.encrypted:
         logger.warning(
             "password_unused",
@@ -48,12 +40,15 @@ def run_extract(config: ExtractConfig, secrets: Secrets, logger: logging.Logger)
         )
 
     attachments = engine.list_attachments(opened)
+    for message in engine.collect_warnings(opened):
+        # attachment streams are read lazily, so repairs can surface here
+        logger.warning("pdf_library_message", extra={"detail": message, "source": "qpdf"})
     if not attachments:
         if config.fail_on_no_attachments:
             raise InputError(
                 f"{config.input} contains no embedded attachments "
                 "(failing because PDFOPS_FAIL_ON_NO_ATTACHMENTS=true)",
-                error_code="NO_ATTACHMENTS",
+                error_code=ErrorCode.NO_ATTACHMENTS,
                 context={"input": str(config.input)},
             )
         return {"attachments_extracted": 0, "bytes_written": 0}
@@ -71,7 +66,7 @@ def run_extract(config: ExtractConfig, secrets: Secrets, logger: logging.Logger)
     if directories:
         raise OutputError(
             f"target name(s) are directories in {config.output_dir}: {', '.join(directories)}",
-            error_code="OUTPUT_IS_DIRECTORY",
+            error_code=ErrorCode.OUTPUT_IS_DIRECTORY,
             context={"output_dir": str(config.output_dir), "directories": directories},
         )
 
@@ -93,7 +88,7 @@ def run_extract(config: ExtractConfig, secrets: Secrets, logger: logging.Logger)
                     f"{len(conflicts)} file(s) already exist in {config.output_dir}: "
                     f"{', '.join(conflicts)} (refusing to overwrite; "
                     "set PDFOPS_ON_EXISTS to overwrite or skip for retry semantics)",
-                    error_code="OUTPUT_EXISTS",
+                    error_code=ErrorCode.OUTPUT_EXISTS,
                     context={"output_dir": str(config.output_dir), "conflicts": conflicts},
                 )
             case OnExists.SKIP:
@@ -141,7 +136,9 @@ def run_extract(config: ExtractConfig, secrets: Secrets, logger: logging.Logger)
             "attachment_extracted",
             extra={
                 "attachment": item.name,
-                "original_name": item.original if item.original != item.name else None,
+                # capped: the original is attacker-controlled and can be
+                # arbitrarily long - it must not balloon the log stream
+                "original_name": (item.original[:200] if item.original != item.name else None),
                 "bytes": len(item.data),
             },
         )

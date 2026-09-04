@@ -12,8 +12,6 @@ clear error pointing at the standard file and exit non-zero. Edit the standard's
 controlled-vocabularies section to change vocabularies - every script picks up the change.
 """
 
-from __future__ import annotations
-
 import re
 import sys
 from pathlib import Path
@@ -58,22 +56,21 @@ ANCHOR_FIELD_RE = re.compile(r"^-\s*\*\*([^:]+):\*\*\s*(.*)$")
 # Vocabulary parsing
 # -----------------------------------------------------------------------------
 
-# Standard path resolution (v0.11.27): prefer --standard-path CLI arg if
-# provided, fall back to relative-to-script default. The default resolves
-# correctly when this script lives at docs/scripts/ in a scaffolded project
-# (parent.parent -> docs/). When invoked from skill-side
-# (~/.claude/skills/init-decisions/templates/), the default fails because
-# the standard isn't co-located - pass --standard-path explicitly. The arg
-# unblocks verify-framework Ability's documented CLI invocation against
-# legacy projects whose docs/scripts/ doesn't have a copy of this script.
+
+# Standard path resolution: prefer the --standard-path CLI arg when given,
+# fall back to the relative-to-script default. The default resolves
+# correctly when this script lives at docs/scripts/ next to the standard
+# (parent.parent -> docs/); a copy running from anywhere else must pass
+# --standard-path explicitly because the standard is not co-located.
 def _resolve_standard_path() -> Path:
     import sys
+
     if "--standard-path" in sys.argv:
         idx = sys.argv.index("--standard-path")
         if idx + 1 < len(sys.argv):
             path = Path(sys.argv[idx + 1]).resolve()
             # Pop the flag + value so consuming scripts' argparse doesn't reject them.
-            del sys.argv[idx:idx + 2]
+            del sys.argv[idx : idx + 2]
             return path
     return Path(__file__).resolve().parent.parent / "DECISION_TRACKING_STANDARD.md"
 
@@ -134,8 +131,8 @@ def _abort(msg: str) -> None:
 def _load() -> dict[str, frozenset[str]]:
     if not STANDARD_PATH.exists():
         _abort(
-            f"DECISION_TRACKING_STANDARD.md not found - required for vocabulary parsing. "
-            f"Run /init-decisions to scaffold it."
+            "DECISION_TRACKING_STANDARD.md not found - required for vocabulary parsing. "
+            "It belongs next to DECISIONS.md in docs/."
         )
     text = STANDARD_PATH.read_text(encoding="utf-8")
     sections = _parse_vocab_sections(text)

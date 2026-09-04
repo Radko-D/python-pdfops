@@ -2,7 +2,7 @@
 
 > **Project:** Containerized PDF operations (merge, extract attachments) for workflow systems
 > **Started:** 2026-08-31
-> **Last updated:** 2026-09-02
+> **Last updated:** 2026-09-04
 
 This document is the authoritative register of all architectural decisions for this project. New decisions are appended with the next available `D-###`. See [DECISION_TRACKING_STANDARD.md](DECISION_TRACKING_STANDARD.md) for format, vocabularies, and workflow. CI validation: [`scripts/validate_decisions.py`](scripts/validate_decisions.py).
 
@@ -18,9 +18,9 @@ This document is the authoritative register of all architectural decisions for t
 | [`D-004`](#D-004) | 🟢 | config | Env contract: PDFOPS_ prefix, fail-fast pure parsing, unknown-var rejection | 2026-08-31 | All config from PDFOPS_* env vars parsed by a pure function over Mapping[str,str] before any file is touched; os.environ only in __main__. Unknown PDFOPS_* vars are rejected as probable typos (exit 2 UNKNOWN_VAR); empty equals missing. | [`DESIGN_NOTES.md section 3`](DESIGN_NOTES.md) | - |
 | [`D-005`](#D-005) | 🟢 | observability | Observability: JSON-lines on stdout via stdlib logging | 2026-08-31 | One JSON object per line on stdout (workflow engine captures step logs); stable event tokens with structured fields; exactly one terminal event per run from the single error boundary. Stdlib logging with a small formatter - no structlog/OTel dependency. | [`DESIGN_NOTES.md section 4`](DESIGN_NOTES.md) | - |
 | [`D-006`](#D-006) | 🔵 | error-handling | Transient exit-code band (10+) for retryable failures | 2026-08-31 | Deferred (2026-08-31): the 0-6 map stands as-is with exit 1 the only maybe-retryable code. A dedicated 10+ transient band (e.g. transient I/O) would let Argo retryStrategy expressions retry precisely; revisit when retry semantics become load-bearing. | [`DESIGN_NOTES.md section 2`](DESIGN_NOTES.md) | - |
-| [`D-007`](#D-007) | ⏸ | config | PDFOPS_INPUTS list separator | 2026-08-31 | Deferred (2026-08-31): the merge implementation ships the recommended default - os.pathsep (colon) with explicit ordered paths, no globs - as provisional. Alternatives (comma, newline, JSON array) parked; revisit if colon-in-path or workflow-templating friction appears. | [`DESIGN_NOTES.md section 3`](DESIGN_NOTES.md) | - |
-| [`D-008`](#D-008) | ⏸ | config | Operation value case strictness | 2026-08-31 | Deferred (2026-08-31): strict lowercase merge/extract (whitespace tolerated) stands as implemented. Case-insensitive acceptance parked; revisit at README/contract freeze or on operator feedback. | [`DESIGN_NOTES.md section 3`](DESIGN_NOTES.md) | - |
-| [`D-009`](#D-009) | ⏸ | config | Unknown PDFOPS_* variable hard rejection | 2026-08-31 | Deferred (2026-08-31): hard rejection (exit 2 UNKNOWN_VAR) stands as implemented. Softening to a warning parked; revisit if a platform legitimately injects foreign PDFOPS_* vars (e.g. when the deployment example is written). | [`DESIGN_NOTES.md section 3`](DESIGN_NOTES.md) | - |
+| [`D-007`](#D-007) | 🟢 | config | PDFOPS_INPUTS list separator | 2026-09-03 | Settled (2026-09-03, deferred since 2026-08-31): os.pathsep (colon) with explicit ordered paths and no globs stands. It survived the container suite, the deployment example, and every walkthrough; colon-in-path never materialized and is pathological for mounted paths anyway (documented limitation). Alternatives (comma, newline, JSON array) rejected as churn without a driving case. | [`DESIGN_NOTES.md section 3`](DESIGN_NOTES.md) | - |
+| [`D-008`](#D-008) | 🟢 | config | Operation value case strictness | 2026-09-03 | Settled (2026-09-03, deferred since 2026-08-31): strict lowercase merge/extract (whitespace tolerated) stands. Operation values come from workflow templates, not humans typing - case tolerance would add contract surface without value, and the error message already names the accepted values. | [`DESIGN_NOTES.md section 3`](DESIGN_NOTES.md) | - |
+| [`D-009`](#D-009) | 🟢 | config | Unknown PDFOPS_* variable hard rejection | 2026-09-03 | Settled (2026-09-03, deferred since 2026-08-31): hard rejection (exit 2 UNKNOWN_VAR) stands. The revisit trigger - a platform injecting foreign PDFOPS_* variables - was tested by writing the deployment example, which injects none; typo protection keeps outweighing a hypothetical soft mode. | [`DESIGN_NOTES.md section 3`](DESIGN_NOTES.md) | - |
 | [`D-010`](#D-010) | 🟢 | reliability | Atomic output writes: temp file in destination dir + os.replace | 2026-08-31 | All output goes to a temp file in the destination directory (same filesystem), is fsynced, and is renamed over the final path in one step; the final path holds a complete PDF or nothing. Existing output refused (OUTPUT_EXISTS) until the overwrite/skip policy lands; missing output dir refused, never auto-created. | [`DESIGN_NOTES.md section 6`](DESIGN_NOTES.md) | - |
 | [`D-011`](#D-011) | 🟢 | pdf-engine | Merge is pages-only; input attachments/bookmarks/metadata not carried | 2026-08-31 | The merged output carries pages only: bookmarks, form fields, metadata, and embedded attachments of the inputs are not copied (no mainstream Python library copies /Names/EmbeddedFiles on merge - attachments would drop silently). Documented limitation; detect-and-warn vs fail-loud vs qpdf --copy-attachments-from evaluated when attachment handling is built out. | [`DESIGN_NOTES.md section 5`](DESIGN_NOTES.md) | - |
 | [`D-012`](#D-012) | 🟢 | error-handling | Merge input validation: collect-all, first problem sets exit class | 2026-08-31 | Every input is checked up front (exists, is a file, readable, %PDF- magic) before any write; all problems are reported in one failure event with the full list in context.problems, and the exit class follows the first problem in input order. Duplicate inputs are a hard config error; a single input is a valid merge. | [`DESIGN_NOTES.md section 6`](DESIGN_NOTES.md) | - |
@@ -34,8 +34,15 @@ This document is the authoritative register of all architectural decisions for t
 | [`D-020`](#D-020) | 🟢 | error-handling | Retryability contract: exit codes stay 0-6, retry guidance is documentation | 2026-09-01 | No 10+ transient exit-code band: the 0-6 map is a published API and nearly every failure class is deterministic, so retryability lives in the README - a per-code table (exit 1 the only default-retryable, DISK_FULL the judgment call) and an Argo retryStrategy.expression snippet, paired with PDFOPS_ON_EXISTS=skip for at-least-once safety. | [`DESIGN_NOTES.md section 9`](DESIGN_NOTES.md) | - |
 | [`D-021`](#D-021) | 🟢 | reliability | PDFOPS_ON_EXISTS tri-state: merge whole-run skip, extract per-file completion | 2026-09-01 | fail (default) refuses; overwrite replaces atomically; skip treats existing output as completed prior work - merge short-circuits without reading inputs, extract writes only missing attachments (sound because every written file is atomic and therefore whole). Stale temp debris matching the run's own targets is removed at startup under a documented single-writer-per-output assumption. | [`DESIGN_NOTES.md section 9`](DESIGN_NOTES.md) | - |
 | [`D-022`](#D-022) | 🟢 | reliability | Output files honor the process umask, not mkstemp's 0600 | 2026-09-02 | atomic_output re-chmods its temp file to 0666 & ~umask at creation: mkstemp's private 0600 would ride through os.replace onto the published output, leaving it unreadable by a downstream step running as a different UID on a shared volume. Invisible under Docker Desktop's ownership-mapping mounts, real on native Linux bind mounts - caught by CI on the first Linux-host run. | [`DESIGN_NOTES.md section 6`](DESIGN_NOTES.md) | - |
+| [`D-023`](#D-023) | 🟢 | pdf-engine | Engine swapped to pikepdf; pypdf demoted to dev-dependency test oracle | 2026-09-02 | engine_pikepdf.py (qpdf-backed) replaces engine_pypdf.py as the runtime engine, executing the D-002 plan: better large-file and corrupt-input behavior, native AES-256 (R=6 pinned). password_type user/owner/empty reporting survives via qpdf's password-matched flags; qpdf repairs light damage pypdf refused (pinned as behavior; warnings surface as events - at open via OpenedInput.warnings, after lazy reads/writes via collect_warnings); duplicate attachment names preserved by walking /Names/EmbeddedFiles directly with cycle and type guards (hostile shapes degrade or classify as data problems, never exit 1); the merged output is saved through the atomic layer's open temp file, keeping the single-temp cleanup contract; failed-open algorithm labels come from a best-effort raw /Encrypt scan. pypdf stays in the dev group building fixtures and verifying outputs - every test is a cross-library check. | [`DESIGN_NOTES.md section 1`](DESIGN_NOTES.md) | - |
+| [`D-024`](#D-024) | 🟢 | security | Secrets stay stdlib, consolidated into one module | 2026-09-03 | All secret handling (Secret wrapper, EnvSecret/FileSecret source refs with resolve()/describe(), Secrets bundle, scrub registration) consolidated into secrets.py; config.py only parses which source is configured. Shelf options evaluated and rejected: pydantic SecretStr (compiled dependency for one masked-repr class), pydantic-settings (config-layer rewrite; secrets_dir expects field-named files in a fixed directory - a different contract from PDFOPS_PASSWORD_FILE=<any path>; ValidationError would need retranslation into the error_code taxonomy), scanner-style log redactors (pattern heuristics, weaker than the exact-value field-restricted scrub that avoids the password-oracle problem). | [`DESIGN_NOTES.md section 8`](DESIGN_NOTES.md) | - |
+| [`D-025`](#D-025) | 🟢 | container | Hardened runtime image: digest-pinned multi-stage build, read-only rootfs | 2026-09-03 | The image is a two-stage build: a digest-pinned uv stage resolves the lockfile into a self-contained virtualenv with compiled bytecode; the runtime stage (digest-pinned python:3.14-slim) carries only that venv, uninstalls the base image's pip, removes stdlib ensurepip (its bundled wheel would restore pip in one command), and runs as fixed non-root UID 10001. Read-only root filesystem is proven by a container test running the golden merge under --read-only --cap-drop ALL --security-opt no-new-privileges (all writes land in the output mount by design). deploy/argo-example.yaml ships the full posture incl. fsGroup, secret-mounted password, a retry expression covering exit 1 plus pod-level Error nodes (which carry no exit code), and memory sized by the measured input+128MB rule. Distroless bases considered and not taken: pinned slim minus pip reaches most of the value while staying debuggable. | [`DESIGN_NOTES.md section 11`](DESIGN_NOTES.md) | - |
+| [`D-026`](#D-026) | 🟢 | infra | One uv-locked toolchain with SHA-pinned, Dependabot-watched CI | 2026-09-04 | pre-commit runs ruff and pyright as local hooks through uv run --locked, so hooks, CI and a developer's shell all resolve the single version pinned in uv.lock (the remote-hook revs had drifted behind the lock). CI runs with a read-only token, per-ref concurrency, job timeouts and actions pinned to full commit SHAs; uv sync --locked replaces --frozen. scripts/ and docs/scripts/ join the ruff and pyright gates - the bare 'scripts' exclude had silently covered both, leaving the CI-run decision validator unlinted; the widened rule set (SIM, PTH, PIE, RET, PERF, FURB, N; ASYNC dropped, no async code exists) surfaced nine findings, fixed in place, and pyright now reports ignore comments that suppress nothing. Dependabot watches the three pinned surfaces weekly: the uv lockfile, the actions, the Docker digests. | [`DESIGN_NOTES.md section 12`](DESIGN_NOTES.md) | - |
+| [`D-027`](#D-027) | 🟢 | error-handling | Input validation extracted into its own module | 2026-09-04 | validate_inputs, the magic-bytes probe and the input-problem classification set moved byte-for-byte from merge.py into inputs.py; extract.py imports from inputs instead of reaching into merge. This removes the only import edge between the two operation modules, which the design doc presents as parallel peers, and gives the input-problem vocabulary a single home. Pure code motion: error codes, the one-failure-reports-all contract (D-012) and the context.problems log shape are unchanged. | [`DESIGN_NOTES.md section 6`](DESIGN_NOTES.md) | - |
+| [`D-028`](#D-028) | 🟢 | error-handling | Error codes typed as a StrEnum with a drift-tested documentation table | 2026-09-04 | The 32 error_code string literals scattered across src/ become a single ErrorCode StrEnum in errors.py, and PdfOpsError takes error_code: ErrorCode - a typo in a code is now a pyright error instead of a silent new vocabulary entry. StrEnum serializes identically to the raw strings, so the JSON log contract is byte-identical; the untouched test assertions that parse log output and compare raw strings pin that independently. docs/OPERATIONS.md gains the complete code table grouped by exit class, and a unit test fails when the enum and the table drift in either direction, so a new code cannot ship undocumented. The remaining small string vocabularies (password_type, password source, output action) get pyright-checked Literal aliases. | [`DESIGN_NOTES.md section 2`](DESIGN_NOTES.md) | - |
+| [`D-029`](#D-029) | 🟢 | project | Security policy and package metadata; future-import dropped on 3.14 | 2026-09-04 | SECURITY.md documents private vulnerability reporting with an in-scope list that maps one-to-one onto the test-pinned guarantees (attachment-name containment, the password no-leak layers, atomic outputs, no taxonomy escapes). pyproject gains project.urls and trove classifiers, including Private :: Do Not Upload so an accidental publish is refused by the index. from __future__ import annotations dropped across the tree: the project pins Python 3.14, where deferred annotation evaluation is the default, so the import was pure noise; there are no TYPE_CHECKING guards anywhere that depended on it. README's dev commands now include the format check CI enforces and the one-time pre-commit install. | [`DESIGN_NOTES.md section 13`](DESIGN_NOTES.md) | - |
 
-**Counts:** 22 total decisions - 17 🟢 decided, 0 🟡 pending, 3 ⏸ deferred, 2 🔵 superseded.
+**Counts:** 29 total decisions - 27 🟢 decided, 0 🟡 pending, 0 ⏸ deferred, 2 🔵 superseded.
 
 ### Index by area
 
@@ -43,22 +50,22 @@ This document is the authoritative register of all architectural decisions for t
 
 | Area | Count | IDs |
 |---|---|---|
-| error-handling | 5 | D-003, D-006, D-012, D-015, D-020 |
+| error-handling | 7 | D-003, D-006, D-012, D-015, D-020, D-027, D-028 |
 | config | 4 | D-004, D-007, D-008, D-009 |
-| pdf-engine | 4 | D-002, D-011, D-016, D-018 |
-| security | 4 | D-013, D-014, D-017, D-019 |
+| pdf-engine | 5 | D-002, D-011, D-016, D-018, D-023 |
+| security | 5 | D-013, D-014, D-017, D-019, D-024 |
 | reliability | 3 | D-010, D-021, D-022 |
 | observability | 1 | D-005 |
-| project | 1 | D-001 |
-| **Total** | **22** | |
+| container | 1 | D-025 |
+| project | 2 | D-001, D-029 |
+| infra | 1 | D-026 |
+| **Total** | **29** | |
 
 ### Open decisions (🟡 Pending + ⏸ Deferred)
 
 | ID | Status | Owner / Trigger |
 |---|---|---|
-| [`D-007`](#D-007) | ⏸ Deferred | Post-merge review, or `:`-in-path / templating friction |
-| [`D-008`](#D-008) | ⏸ Deferred | Contract freeze, or mixed-case values seen in practice |
-| [`D-009`](#D-009) | ⏸ Deferred | Platform injecting foreign `PDFOPS_*` vars (deployment-example watch) |
+| _(none)_ | | |
 
 ### Decisions scheduled for revisit
 
@@ -146,37 +153,34 @@ Per-decision details: status, decided date, rationale, related decisions, and th
 <a id="D-007"></a>
 ### D-007
 - **Title:** PDFOPS_INPUTS list separator
-- **Status:** ⏸ Deferred
+- **Status:** 🟢 Decided
 - **Area:** config
-- **Decided on:** 2026-08-31
-- **Summary:** Deferred (2026-08-31): the merge implementation ships the recommended default - os.pathsep (colon) with explicit ordered paths, no globs - as provisional. Alternatives (comma, newline, JSON array) parked; revisit if colon-in-path or workflow-templating friction appears.
+- **Decided on:** 2026-09-03
+- **Summary:** Settled (2026-09-03, deferred since 2026-08-31): os.pathsep (colon) with explicit ordered paths and no globs stands. It survived the container suite, the deployment example, and every walkthrough; colon-in-path never materialized and is pathological for mounted paths anyway (documented limitation). Alternatives (comma, newline, JSON array) rejected as churn without a driving case.
 - **Risk:** low
 - **Reversibility:** expensive
-- **Phase trigger:** Post-merge review, or the first path containing `:` / workflow-templating friction with the provisional os.pathsep separator.
 - **Where:** [`DESIGN_NOTES.md section 3`](DESIGN_NOTES.md)
 
 <a id="D-008"></a>
 ### D-008
 - **Title:** Operation value case strictness
-- **Status:** ⏸ Deferred
+- **Status:** 🟢 Decided
 - **Area:** config
-- **Decided on:** 2026-08-31
-- **Summary:** Deferred (2026-08-31): strict lowercase merge/extract (whitespace tolerated) stands as implemented. Case-insensitive acceptance parked; revisit at README/contract freeze or on operator feedback.
+- **Decided on:** 2026-09-03
+- **Summary:** Settled (2026-09-03, deferred since 2026-08-31): strict lowercase merge/extract (whitespace tolerated) stands. Operation values come from workflow templates, not humans typing - case tolerance would add contract surface without value, and the error message already names the accepted values.
 - **Risk:** low
 - **Reversibility:** cheap
-- **Phase trigger:** README/contract freeze, or operator feedback that mixed-case operation values occur in practice.
 - **Where:** [`DESIGN_NOTES.md section 3`](DESIGN_NOTES.md)
 
 <a id="D-009"></a>
 ### D-009
 - **Title:** Unknown PDFOPS_* variable hard rejection
-- **Status:** ⏸ Deferred
+- **Status:** 🟢 Decided
 - **Area:** config
-- **Decided on:** 2026-08-31
-- **Summary:** Deferred (2026-08-31): hard rejection (exit 2 UNKNOWN_VAR) stands as implemented. Softening to a warning parked; revisit if a platform legitimately injects foreign PDFOPS_* vars (e.g. when the deployment example is written).
+- **Decided on:** 2026-09-03
+- **Summary:** Settled (2026-09-03, deferred since 2026-08-31): hard rejection (exit 2 UNKNOWN_VAR) stands. The revisit trigger - a platform injecting foreign PDFOPS_* variables - was tested by writing the deployment example, which injects none; typo protection keeps outweighing a hypothetical soft mode.
 - **Risk:** low
 - **Reversibility:** cheap
-- **Phase trigger:** A platform legitimately injecting foreign `PDFOPS_*` variables (watch when writing the deployment example).
 - **Where:** [`DESIGN_NOTES.md section 3`](DESIGN_NOTES.md)
 
 <a id="D-010"></a>
@@ -328,6 +332,83 @@ Per-decision details: status, decided date, rationale, related decisions, and th
 - **Reversibility:** cheap
 - **Amends:** [D-010](#D-010)
 - **Where:** [`DESIGN_NOTES.md section 6`](DESIGN_NOTES.md)
+
+<a id="D-023"></a>
+### D-023
+- **Title:** Engine swapped to pikepdf; pypdf demoted to dev-dependency test oracle
+- **Status:** 🟢 Decided
+- **Area:** pdf-engine
+- **Decided on:** 2026-09-02
+- **Summary:** engine_pikepdf.py (qpdf-backed) replaces engine_pypdf.py as the runtime engine, executing the D-002 plan: better large-file and corrupt-input behavior, native AES-256 (R=6 pinned). password_type user/owner/empty reporting survives via qpdf's password-matched flags; qpdf repairs light damage pypdf refused (pinned as behavior; warnings surface as events - at open via OpenedInput.warnings, after lazy reads/writes via collect_warnings); duplicate attachment names preserved by walking /Names/EmbeddedFiles directly with cycle and type guards (hostile shapes degrade or classify as data problems, never exit 1); the merged output is saved through the atomic layer's open temp file, keeping the single-temp cleanup contract; failed-open algorithm labels come from a best-effort raw /Encrypt scan. pypdf stays in the dev group building fixtures and verifying outputs - every test is a cross-library check.
+- **Risk:** medium
+- **Reversibility:** cheap
+- **Where:** [`DESIGN_NOTES.md section 1`](DESIGN_NOTES.md)
+
+<a id="D-024"></a>
+### D-024
+- **Title:** Secrets stay stdlib, consolidated into one module
+- **Status:** 🟢 Decided
+- **Area:** security
+- **Decided on:** 2026-09-03
+- **Summary:** All secret handling (Secret wrapper, EnvSecret/FileSecret source refs with resolve()/describe(), Secrets bundle, scrub registration) consolidated into secrets.py; config.py only parses which source is configured. Shelf options evaluated and rejected: pydantic SecretStr (compiled dependency for one masked-repr class), pydantic-settings (config-layer rewrite; secrets_dir expects field-named files in a fixed directory - a different contract from PDFOPS_PASSWORD_FILE=<any path>; ValidationError would need retranslation into the error_code taxonomy), scanner-style log redactors (pattern heuristics, weaker than the exact-value field-restricted scrub that avoids the password-oracle problem).
+- **Risk:** low
+- **Reversibility:** cheap
+- **Where:** [`DESIGN_NOTES.md section 8`](DESIGN_NOTES.md)
+
+<a id="D-025"></a>
+### D-025
+- **Title:** Hardened runtime image: digest-pinned multi-stage build, read-only rootfs
+- **Status:** 🟢 Decided
+- **Area:** container
+- **Decided on:** 2026-09-03
+- **Summary:** The image is a two-stage build: a digest-pinned uv stage resolves the lockfile into a self-contained virtualenv with compiled bytecode; the runtime stage (digest-pinned python:3.14-slim) carries only that venv, uninstalls the base image's pip, removes stdlib ensurepip (its bundled wheel would restore pip in one command), and runs as fixed non-root UID 10001. Read-only root filesystem is proven by a container test running the golden merge under --read-only --cap-drop ALL --security-opt no-new-privileges (all writes land in the output mount by design). deploy/argo-example.yaml ships the full posture incl. fsGroup, secret-mounted password, a retry expression covering exit 1 plus pod-level Error nodes (which carry no exit code), and memory sized by the measured input+128MB rule. Distroless bases considered and not taken: pinned slim minus pip reaches most of the value while staying debuggable.
+- **Risk:** low
+- **Reversibility:** cheap
+- **Where:** [`DESIGN_NOTES.md section 11`](DESIGN_NOTES.md)
+
+<a id="D-026"></a>
+### D-026
+- **Title:** One uv-locked toolchain with SHA-pinned, Dependabot-watched CI
+- **Status:** 🟢 Decided
+- **Area:** infra
+- **Decided on:** 2026-09-04
+- **Summary:** pre-commit runs ruff and pyright as local hooks through uv run --locked, so hooks, CI and a developer's shell all resolve the single version pinned in uv.lock (the remote-hook revs had drifted behind the lock). CI runs with a read-only token, per-ref concurrency, job timeouts and actions pinned to full commit SHAs; uv sync --locked replaces --frozen. scripts/ and docs/scripts/ join the ruff and pyright gates - the bare 'scripts' exclude had silently covered both, leaving the CI-run decision validator unlinted; the widened rule set (SIM, PTH, PIE, RET, PERF, FURB, N; ASYNC dropped, no async code exists) surfaced nine findings, fixed in place, and pyright now reports ignore comments that suppress nothing. Dependabot watches the three pinned surfaces weekly: the uv lockfile, the actions, the Docker digests.
+- **Risk:** low
+- **Reversibility:** cheap
+- **Where:** [`DESIGN_NOTES.md section 12`](DESIGN_NOTES.md)
+
+<a id="D-027"></a>
+### D-027
+- **Title:** Input validation extracted into its own module
+- **Status:** 🟢 Decided
+- **Area:** error-handling
+- **Decided on:** 2026-09-04
+- **Summary:** validate_inputs, the magic-bytes probe and the input-problem classification set moved byte-for-byte from merge.py into inputs.py; extract.py imports from inputs instead of reaching into merge. This removes the only import edge between the two operation modules, which the design doc presents as parallel peers, and gives the input-problem vocabulary a single home. Pure code motion: error codes, the one-failure-reports-all contract (D-012) and the context.problems log shape are unchanged.
+- **Risk:** low
+- **Reversibility:** cheap
+- **Where:** [`DESIGN_NOTES.md section 6`](DESIGN_NOTES.md)
+
+<a id="D-028"></a>
+### D-028
+- **Title:** Error codes typed as a StrEnum with a drift-tested documentation table
+- **Status:** 🟢 Decided
+- **Area:** error-handling
+- **Decided on:** 2026-09-04
+- **Summary:** The 32 error_code string literals scattered across src/ become a single ErrorCode StrEnum in errors.py, and PdfOpsError takes error_code: ErrorCode - a typo in a code is now a pyright error instead of a silent new vocabulary entry. StrEnum serializes identically to the raw strings, so the JSON log contract is byte-identical; the untouched test assertions that parse log output and compare raw strings pin that independently. docs/OPERATIONS.md gains the complete code table grouped by exit class, and a unit test fails when the enum and the table drift in either direction, so a new code cannot ship undocumented. The remaining small string vocabularies (password_type, password source, output action) get pyright-checked Literal aliases.
+- **Risk:** low
+- **Reversibility:** cheap
+- **Where:** [`DESIGN_NOTES.md section 2`](DESIGN_NOTES.md)
+
+<a id="D-029"></a>
+### D-029
+- **Title:** Security policy and package metadata; future-import dropped on 3.14
+- **Status:** 🟢 Decided
+- **Area:** project
+- **Decided on:** 2026-09-04
+- **Summary:** SECURITY.md documents private vulnerability reporting with an in-scope list that maps one-to-one onto the test-pinned guarantees (attachment-name containment, the password no-leak layers, atomic outputs, no taxonomy escapes). pyproject gains project.urls and trove classifiers, including Private :: Do Not Upload so an accidental publish is refused by the index. from __future__ import annotations dropped across the tree: the project pins Python 3.14, where deferred annotation evaluation is the default, so the import was pure noise; there are no TYPE_CHECKING guards anywhere that depended on it. README's dev commands now include the format check CI enforces and the one-time pre-commit install.
+- **Risk:** low
+- **Reversibility:** cheap
+- **Where:** [`DESIGN_NOTES.md section 13`](DESIGN_NOTES.md)
 
 ---
 

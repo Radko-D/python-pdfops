@@ -34,7 +34,32 @@ for the resource-behavior and corrupt-input quality dimensions. Keeping the engi
 one seam (`engine.py`) makes the swap a single-module change and forces library exceptions
 to be translated into the application taxonomy in exactly one place.
 
-## 2. Exit-code taxonomy (per [D-003](DECISIONS.md#D-003))
+**Swap executed ([D-023](DECISIONS.md#D-023)):** `engine_pikepdf.py` replaced
+`engine_pypdf.py`; pypdf moved to the dev group, where it still builds every test
+fixture and independently verifies outputs - each green test is a two-library
+cross-check. Realities found at swap time: qpdf exposes which document password a
+supplied string matched (`user_password_matched`/`owner_password_matched`), so the
+`user`/`owner`/`empty` reporting survived intact; qpdf *repairs* light damage
+(truncation, mangled xref) that pypdf refused, so the corrupt-input fixtures had to
+become genuinely unrecoverable and the repair behavior is pinned as its own test with
+warnings surfaced as `pdf_library_message` events (qpdf reports through its own
+channel, not Python logging: open-time warnings ride on `OpenedInput.warnings`, and
+because qpdf reads stream data lazily, repairs discovered during the write or during
+attachment reads are drained afterwards via the engine's `collect_warnings`); the
+merged output is saved through the atomic-write layer's already-open temp file rather
+than by path - handed a path to an existing file, pikepdf would route through its own
+second hidden temp, whose debris after a kill no cleanup would ever match; qpdf hands
+malformed structures over as native Python values, so the walks guard node types and
+keep a builtin-exception net (a hostile name tree must classify as a data problem,
+never as a retryable internal error, and an integer name-tree key must not become an
+attacker-sized `bytes(n)` allocation); when an open fails
+outright there is no handle to read encryption facts from, so the algorithm label on
+`PASSWORD_REQUIRED`/`WRONG_PASSWORD` errors comes from a best-effort raw scan of the
+plaintext `/Encrypt` dictionary; and duplicate-name fidelity required walking
+`/Names/EmbeddedFiles` directly (cycle-guarded) because `Pdf.attachments` is a
+Mapping, exactly as predicted in section 1.
+
+## 2. Exit-code taxonomy (per [D-003](DECISIONS.md#D-003), [D-028](DECISIONS.md#D-028))
 
 The process exit code is the application's external API toward the workflow engine. Classes,
 not fine-grained codes - workflow engines branch on codes, and codes are a scarce, stable
@@ -60,6 +85,14 @@ dedicated `10+` transient band was resolved with the retry-semantics work
 deterministic, and retryability is better expressed as documentation the operator
 composes (README's per-code table + retryStrategy expression) than as more codes.
 
+**Typed vocabulary ([D-028](DECISIONS.md#D-028)):** the fine-grained `error_code`
+tokens started as string literals at each raise site. They are now a single
+`ErrorCode` StrEnum, so the complete vocabulary is readable in one place and a
+typo is a type error rather than a silent new code. StrEnum members serialize
+exactly like the raw strings, so nothing changes on the wire; the log-parsing
+tests that compare raw strings pin that independently. The full table, grouped
+by exit class, lives in OPERATIONS.md with a drift test against the enum.
+
 ## 3. Environment-variable contract (per [D-004](DECISIONS.md#D-004))
 
 Conventions:
@@ -78,7 +111,7 @@ Conventions:
 - Missing and empty values are treated identically (`MISSING_VAR`) - an empty value almost
   always means a broken template substitution upstream.
 - `PDFOPS_INPUTS` is an **explicit ordered list** (`os.pathsep`-separated - the `PATH`
-  convention; see deferred [D-007](DECISIONS.md#D-007)). No glob support, deliberately:
+  convention; per [D-007](DECISIONS.md#D-007)). No glob support, deliberately:
   merge order must be explicit, not lexicographic luck, or retries and re-runs can produce
   different documents. Duplicates are rejected (`DUPLICATE_INPUTS`). A single input is
   allowed - workflows fan in variable-length lists that can be of length one.
@@ -147,13 +180,20 @@ copies `/Names/EmbeddedFiles` on a page-level merge, so attachments in merge inp
 silently dropped - options (detect-and-warn, fail-loud flag, qpdf's
 `--copy-attachments-from`) are evaluated when attachment handling is built out.
 
-## 6. Input validation and atomic output (per [D-010](DECISIONS.md#D-010), [D-012](DECISIONS.md#D-012))
+## 6. Input validation and atomic output (per [D-010](DECISIONS.md#D-010), [D-012](DECISIONS.md#D-012), [D-027](DECISIONS.md#D-027))
 
 **Collect-all validation ([D-012](DECISIONS.md#D-012)):** every input is checked up front
 (exists, is a file, readable, starts with `%PDF-`) and *all* problems are reported in one
 failure event - an operator fixing a broken workflow learns about every bad input from a
 single run, not one per retry. The exit class follows the first problem in input order
 (deterministic); the full list travels in `context.problems`.
+
+**One home for the check ([D-027](DECISIONS.md#D-027)):** the validation originally
+lived in `merge.py` with `extract.py` importing it from there - the only import edge
+between two modules the design doc presents as parallel peers. It moved byte-for-byte
+into `inputs.py`, so both operations depend on the shared module instead of one
+depending on the other. Pure code motion: error codes, the collect-all contract and
+the `context.problems` shape are unchanged.
 
 **Atomic output ([D-010](DECISIONS.md#D-010)):** all output is written to a temp file
 created *in the destination directory* - same filesystem, because `os.replace` is only
@@ -214,6 +254,15 @@ attachments); pypdf's `attachment_list` does not surface them. Documented as a l
 rather than half-supported.
 
 ## 8. Passwords and output encryption (per [D-017](DECISIONS.md#D-017), [D-018](DECISIONS.md#D-018), [D-019](DECISIONS.md#D-019))
+
+**Where the code lives ([D-024](DECISIONS.md#D-024)):** the whole lifecycle - wrapper,
+source refs, resolution, scrub registration - sits in one module (`secrets.py`) after
+an evaluation of the shelf options: pydantic's `SecretStr` buys one masked-repr class
+for a compiled dependency; pydantic-settings would rewrite the config layer, and its
+`secrets_dir` convention (field-named files in a fixed directory) is a different
+contract from `PDFOPS_PASSWORD_FILE=<any mounted path>`; scanner-style log redactors
+are pattern-heuristic - strictly weaker than the exact-value, field-restricted scrub
+below, which exists precisely because naive scrubbing becomes a password oracle.
 
 **Channels ([D-017](DECISIONS.md#D-017)):** one password, two mutually exclusive sources -
 `PDFOPS_PASSWORD_FILE` (a mounted secret, the preferred channel: it never appears in pod
@@ -323,3 +372,125 @@ another target's temps - and a run's own planned outputs are structurally exclud
 cleanup, which happens entirely before the first write. Merge's `skip` short-circuit
 reads nothing at all: not the inputs, and not the mounted password file (secrets resolve
 lazily, after the skip decision).
+
+## 10. Resource behavior (measured 2026-09-03)
+
+Method: `scripts/benchmark.py` generates large fixtures (incompressible random
+bytes in uncompressed streams, so sizes are honest; never committed) and runs
+each scenario through the real container image under a small wrapper that
+reports both the operation process's peak RSS (`ru_maxrss`) and the cgroup's
+`memory.peak` - the number Kubernetes actually meters, which additionally
+counts the reclaimable page cache the run touched. Environment: Docker Desktop
+on an Apple Silicon host; durations are indicative, the memory profile is
+structural.
+
+| Scenario | Duration | Peak process RSS | Peak cgroup memory |
+|---|---|---|---|
+| merge 2 x 5 MB (baseline) | 0.05 s | ~36 MB | ~51 MB |
+| merge 2 x 250 MB | 1.8 s | ~529 MB | ~1519 MB |
+| merge 20 x 25 MB | 1.2 s | ~531 MB | ~1515 MB |
+| merge 250 MB AES-256 in, re-encrypted out | 2.8 s | ~281 MB | ~779 MB |
+| extract 10 x 25 MB attachments | 0.5 s | ~333 MB | ~579 MB |
+
+Findings, in order of consequence:
+
+- **Peak process memory is linear in total input bytes** - roughly total input
+  size plus ~40 MB of fixed interpreter/library overhead - and indifferent to
+  how those bytes are split across files (2 x 250 MB and 20 x 25 MB profile
+  identically). The writer holds the copied stream data until `save()`
+  completes, so a merge effectively buffers one output's worth of content.
+  Multi-gigabyte merges therefore need matching memory; a streaming rewrite is
+  future work, noted rather than planned.
+- **Crypto costs time, not memory**: decrypt + AES-256 re-encrypt of 250 MB
+  added about a second and peaked at input size like any other run.
+- **The cgroup peak runs ~2-3x the process RSS** purely from page cache
+  (inputs read plus output written). Cache is reclaimable under memory
+  pressure, so limits do not need to cover it - the sizing rule in
+  `OPERATIONS.md` (total expected input + 128 MB) is set against RSS.
+- OOM behavior is unchanged from section 2's taxonomy stance: exceeding the
+  limit is a SIGKILL, no terminal event, the workflow engine reports it.
+
+## 11. Container hardening (2026-09-03)
+
+The image became production-shaped in one pass:
+
+- **Multi-stage build**: a uv build stage (pinned by digest) resolves the
+  lockfile into a self-contained virtualenv with compiled bytecode; the
+  runtime stage copies only that venv onto a digest-pinned `python:3.14-slim`
+  base. No uv, no caches, and no package installer ship - the base image's
+  own pip is uninstalled AND stdlib `ensurepip` is removed (its bundled
+  wheel would restore pip in one command), with a container test probing
+  both interpreters (the venv python cannot see base site-packages, so a
+  venv-only probe would be vacuous).
+- **Read-only root filesystem, proven not promised**: all writes go to the
+  output mount by design (temp files live in the destination directory for
+  rename atomicity, and pikepdf saves through our open handle), so the image
+  runs under `--read-only --cap-drop ALL --security-opt no-new-privileges`
+  unmodified - a container test executes the golden merge under exactly that
+  posture.
+- **`deploy/argo-example.yaml`**: a WorkflowTemplate wiring together
+  everything the docs describe - the security context (non-root 10001,
+  read-only rootfs, no capabilities, fsGroup for output writability), the
+  password as a mounted secret file, a retry expression covering exit 1 and
+  pod-level errors (an Error-phase node never produces an exit code - Argo
+  substitutes "-1" - so exit-code-only expressions silently skip the
+  lost-pod case they are usually written for) paired with
+  `PDFOPS_ON_EXISTS=skip`, and memory sized by the measured rule from
+  section 10.
+
+Considered and not taken: distroless/static bases (the pinned slim base with
+pip removed reaches most of the value while keeping a debuggable Python
+layout); image signing/SBOM (registry- and org-specific, noted as release
+engineering rather than image structure).
+
+## 12. Toolchain and CI pinning (per [D-026](DECISIONS.md#D-026))
+
+The repo had three places that could each pick their own tool versions: the
+pre-commit hook pins, uv.lock, and whatever a developer's shell resolved.
+They had already drifted - the hooks pinned older ruff and pyright releases
+than the lockfile. The fix is structural rather than a version bump: the
+Python tools run as local pre-commit hooks through `uv run --locked`, so
+hooks, CI and a developer's shell all execute the single version pinned in
+uv.lock. Only the generic hygiene hooks (whitespace, YAML/TOML syntax,
+large files) still come from a remote hook repo.
+
+Two related gaps closed in the same pass:
+
+- **The gates now cover every script.** The bare `scripts` entry in the
+  ruff exclude list silently matched both `scripts/` and `docs/scripts/`,
+  leaving the decision-register validator - which CI executes on every
+  push - unlinted and untyped. Both directories joined the ruff and pyright
+  gates; the widened rule set (SIM, PTH, PIE, RET, PERF, FURB, N added;
+  ASYNC dropped because no async code exists) surfaced nine findings, all
+  fixed with behavior-preserving edits. pyright's
+  `reportUnnecessaryTypeIgnoreComment` keeps ignore comments honest; four
+  that suppressed nothing were removed.
+- **CI itself is pinned and least-privilege.** Actions are pinned to full
+  commit SHAs (a tag can be moved; a SHA cannot), the workflow token is
+  read-only, runs on the same ref supersede each other, and jobs carry
+  timeouts. `uv sync --locked` verifies the lockfile matches pyproject
+  instead of silently trusting it.
+
+Pinning everything creates a staleness problem, so Dependabot watches the
+three pinned surfaces weekly: the uv lockfile (dev tooling grouped into one
+PR), the action SHAs, and the Docker base-image digests.
+
+## 13. Repository housekeeping (per [D-029](DECISIONS.md#D-029))
+
+Three small decisions that make the repository read correctly from the
+outside:
+
+- **SECURITY.md**: private vulnerability reporting, with an in-scope list
+  that is a one-to-one summary of the guarantees the test suite pins -
+  attachment-name containment, the password no-leak layers, whole-or-absent
+  outputs, and the rule that a hostile input must classify as a data
+  problem, never as a retryable internal error.
+- **Package metadata**: `project.urls` and trove classifiers in pyproject,
+  led by `Private :: Do Not Upload` - the package is a container payload,
+  not a library, and the index refuses that classifier if anyone ever runs
+  a publish by mistake.
+- **No `from __future__ import annotations`**: the project pins Python
+  3.14, where deferred annotation evaluation (PEP 649) is the default. The
+  import survived from habit in every module; dropping it removes a
+  visible signal of code written for older interpreters. No TYPE_CHECKING
+  guard anywhere depended on it.

@@ -1,7 +1,5 @@
 """Table-driven tests for the env-var configuration contract."""
 
-from __future__ import annotations
-
 import logging
 import os
 from pathlib import Path
@@ -9,18 +7,15 @@ from pathlib import Path
 import pytest
 
 from pdf_ops.config import (
-    EnvSecret,
     ExtractConfig,
-    FileSecret,
     MergeConfig,
     OnExists,
     Operation,
     OutputEncryption,
     parse_config,
-    resolve_secret,
 )
 from pdf_ops.errors import ConfigError
-from pdf_ops.secret import Secret
+from pdf_ops.secrets import EnvSecret, FileSecret, Secret, resolve_secret
 
 pytestmark = pytest.mark.unit
 

@@ -1,7 +1,5 @@
 """End-to-end merge runs through run(env): the merge operator contract."""
 
-from __future__ import annotations
-
 import errno
 import os
 from collections.abc import Callable
@@ -12,8 +10,8 @@ from pypdf import PdfReader
 
 import pdf_ops.merge
 from pdf_ops.engine import OpenedInput
-from pdf_ops.errors import InvalidPdfError
-from tests.conftest import RunApp
+from pdf_ops.errors import ErrorCode, InvalidPdfError
+from tests.helpers import RunApp, build_raw_pdf
 
 pytestmark = pytest.mark.integration
 
@@ -153,7 +151,7 @@ class TestInputValidation:
         assert code == 4
         assert events[-1]["error_code"] == "NOT_A_PDF"
 
-    @pytest.mark.parametrize("mode", ["truncate", "mangle-xref"])
+    @pytest.mark.parametrize("mode", ["garbage-body", "no-objects"])
     def test_corrupt_pdf_rejected(
         self,
         make_corrupt_pdf: Callable[..., Path],
@@ -238,11 +236,11 @@ class TestOutputPolicy:
 
 
 class TestPathologicalInputs:
-    def test_pypdf_builtin_exception_maps_to_corrupt(
+    def test_catalog_without_pages_maps_to_corrupt(
         self, make_pathological_pdf: Callable[..., Path], out_dir: Path, run_app: RunApp
     ) -> None:
-        # Valid header + xref but no /Pages: pypdf raises AttributeError, not
-        # its own exception type - it must still classify as exit 4, not 1.
+        # Valid header + xref but no /Pages: a structural hole the engine
+        # must classify as exit 4, never as an internal error.
         bad = make_pathological_pdf()
         code, events = run_app(merge_env([bad], out_dir / "m.pdf"))
         assert code == 4
@@ -251,17 +249,58 @@ class TestPathologicalInputs:
     def test_library_warning_goes_to_stdout_json_not_stderr(
         self, make_dangling_ref_pdf: Callable[..., Path], out_dir: Path, run_app: RunApp
     ) -> None:
-        # A repairable input: pypdf warns ("Object 9 0 not defined") but the
-        # merge succeeds. run_app's invariants assert stderr stays empty and
-        # stdout stays JSON-only; the warning must surface as a JSON event.
+        # A repairable input: qpdf fixes it up but reports the damage. The
+        # run_app invariants assert stderr stays empty and stdout stays
+        # JSON-only; the warning must surface as a JSON event.
         repairable = make_dangling_ref_pdf()
         code, events = run_app(merge_env([repairable], out_dir / "m.pdf"))
         assert code == 0
         warnings = [e for e in events if e["event"] == "pdf_library_message"]
-        assert warnings, "the pypdf warning must appear as a structured event"
+        assert warnings, "the library warning must appear as a structured event"
         assert warnings[0]["level"] == "warning"
-        assert "9 0" in warnings[0]["detail"]
-        assert warnings[0]["source"].startswith("pypdf")
+        assert "repairing" in warnings[0]["detail"]
+        assert warnings[0]["source"] == "qpdf"
+
+    def test_repair_during_lazy_write_still_surfaces_a_warning(
+        self, tmp_path: Path, out_dir: Path, run_app: RunApp
+    ) -> None:
+        # qpdf reads stream data lazily: damage discovered only while the
+        # writer copies (a wrong stream /Length) repairs at write time and
+        # must still surface as an event, not be silently absorbed.
+        source = tmp_path / "late.pdf"
+        source.write_bytes(
+            build_raw_pdf(
+                [
+                    "<< /Type /Catalog /Pages 2 0 R >>",
+                    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+                    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 300] /Contents 4 0 R >>",
+                    b"<< /Length 999 >>\nstream\n0 0 m 10 10 l S\nendstream",
+                ]
+            )
+        )
+        code, events = run_app(merge_env([source], out_dir / "m.pdf"))
+        assert code == 0
+        warnings = [e for e in events if e["event"] == "pdf_library_message"]
+        assert warnings, "a write-time repair must produce a structured event"
+
+    def test_light_damage_is_repaired_with_warnings(
+        self,
+        make_damaged_pdf: Callable[..., Path],
+        make_pdf: Callable[..., Path],
+        out_dir: Path,
+        run_app: RunApp,
+    ) -> None:
+        # A mangled xref is recoverable: the engine reconstructs the table,
+        # the merge succeeds with every page, and the damage is visible in
+        # the log rather than silently absorbed.
+        damaged = make_damaged_pdf()
+        plain = make_pdf(name="plain.pdf")
+        output = out_dir / "m.pdf"
+        code, events = run_app(merge_env([damaged, plain], output))
+        assert code == 0
+        assert events[-1]["pages"] == 3
+        assert any(e["event"] == "pdf_library_message" for e in events)
+        assert len(PdfReader(output).pages) == 3
 
 
 class FakeEngine:
@@ -276,7 +315,7 @@ class FakeEngine:
             path=path, handle=None, pages=1, encrypted=False, algorithm=None, password_type=None
         )
 
-    def merge_to(self, inputs: object, destination: Path, output_password: object) -> None:
+    def merge_to(self, inputs: object, destination: Path, output_password: object) -> list[str]:
         destination.write_bytes(b"%PDF- partial garbage")
         raise self.error
 
@@ -310,7 +349,7 @@ class TestFailureAfterBytesWritten:
         out_dir: Path,
         run_app: RunApp,
     ) -> None:
-        fake_engine(InvalidPdfError("boom mid-write", error_code="CORRUPT_PDF", context={}))
+        fake_engine(InvalidPdfError("boom mid-write", error_code=ErrorCode.CORRUPT_PDF, context={}))
         source = make_pdf()
         code, _ = run_app(merge_env([source], out_dir / "m.pdf"))
         assert code == 4

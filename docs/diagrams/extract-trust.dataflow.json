@@ -1,0 +1,216 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "Extract: Untrusted Names to Safe Files",
+    "quality_profile": "showcase",
+    "views": [
+      {
+        "id": "name-path",
+        "label": "The name gauntlet",
+        "focus": [
+          "carrier",
+          "treewalk",
+          "sanitizer",
+          "planner",
+          "containment"
+        ],
+        "note": "Every attachment name is attacker-controlled until the sanitizer and plan are done with it."
+      },
+      {
+        "id": "payload-path",
+        "label": "The payload path",
+        "focus": [
+          "treewalk",
+          "writer"
+        ],
+        "note": "Payload bytes are opaque content - they are stored, never interpreted as paths."
+      },
+      {
+        "id": "landing",
+        "label": "Atomic landing",
+        "focus": [
+          "containment",
+          "writer"
+        ],
+        "note": "Only verified targets reach the atomic write into the mounted directory."
+      }
+    ],
+    "viewBox": [
+      1080,
+      500
+    ]
+  },
+  "stages": [
+    {
+      "label": "Untrusted source"
+    },
+    {
+      "label": "Engine walk"
+    },
+    {
+      "label": "Sanitize"
+    },
+    {
+      "label": "Plan"
+    },
+    {
+      "label": "Write"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "carrier",
+      "type": "external",
+      "label": "Carrier PDF",
+      "sublabel": "attacker-controlled",
+      "stage": 0,
+      "row": 1,
+      "tag": "hostile"
+    },
+    {
+      "id": "treewalk",
+      "type": "backend",
+      "label": "Name-tree walk",
+      "sublabel": "duplicates preserved",
+      "stage": 1,
+      "row": 1,
+      "tag": "cycle-guarded"
+    },
+    {
+      "id": "sanitizer",
+      "type": "security",
+      "label": "Name sanitizer",
+      "sublabel": "pure function",
+      "stage": 2,
+      "row": 0,
+      "tag": "basename only"
+    },
+    {
+      "id": "planner",
+      "type": "backend",
+      "label": "Target plan",
+      "sublabel": "casefolded dedupe",
+      "stage": 3,
+      "row": 0,
+      "tag": "-1/-2 suffixes"
+    },
+    {
+      "id": "containment",
+      "type": "security",
+      "label": "Containment recheck",
+      "sublabel": "parent must be the mount",
+      "stage": 3,
+      "row": 2,
+      "tag": "last line"
+    },
+    {
+      "id": "writer",
+      "type": "database",
+      "label": "Atomic write",
+      "sublabel": "into PDFOPS_OUTPUT_DIR",
+      "stage": 4,
+      "row": 1,
+      "tag": "temp + rename"
+    }
+  ],
+  "flows": [
+    {
+      "id": "raw-tree",
+      "from": "carrier",
+      "to": "treewalk",
+      "label": "raw name tree",
+      "classification": "untrusted structure",
+      "variant": "security"
+    },
+    {
+      "id": "raw-names",
+      "from": "treewalk",
+      "to": "sanitizer",
+      "label": "attachment names",
+      "classification": "untrusted strings",
+      "variant": "security"
+    },
+    {
+      "id": "payload-bytes",
+      "from": "treewalk",
+      "to": "writer",
+      "label": "payload bytes",
+      "classification": "opaque content",
+      "variant": "dashed",
+      "fromSide": "bottom",
+      "toSide": "bottom",
+      "via": [
+        [
+          315,
+          430
+        ],
+        [
+          960,
+          430
+        ]
+      ]
+    },
+    {
+      "id": "safe-names",
+      "from": "sanitizer",
+      "to": "planner",
+      "label": "safe basenames",
+      "classification": "fallback for garbage",
+      "variant": "emphasis",
+      "labelAt": [
+        638,
+        200
+      ]
+    },
+    {
+      "id": "planned-targets",
+      "from": "planner",
+      "to": "containment",
+      "label": "planned targets",
+      "classification": "per-volume unique",
+      "variant": "default",
+      "labelAt": [
+        745,
+        200
+      ]
+    },
+    {
+      "id": "verified-paths",
+      "from": "containment",
+      "to": "writer",
+      "label": "verified paths",
+      "classification": "inside the mount",
+      "variant": "emphasis"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "rose",
+      "title": "Trust boundary",
+      "items": [
+        "A name like ../../evil.txt would be a write-anywhere primitive",
+        "Sanitizing always beats rejecting: renaming is lossless and logged",
+        "The containment recheck guards against sanitizer regressions"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Determinism",
+      "items": [
+        "Extraction order is the PDF name-tree order",
+        "Duplicate names get deterministic -1/-2 suffixes",
+        "Collisions are detected on casefolded names for case-insensitive volumes"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "Payloads",
+      "items": [
+        "Payload bytes never pass through path handling",
+        "Each file is written atomically: whole or absent",
+        "A non-string name key still extracts under a fallback name"
+      ]
+    }
+  ]
+}
