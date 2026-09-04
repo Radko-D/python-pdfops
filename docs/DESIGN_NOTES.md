@@ -474,3 +474,23 @@ Two related gaps closed in the same pass:
 Pinning everything creates a staleness problem, so Dependabot watches the
 three pinned surfaces weekly: the uv lockfile (dev tooling grouped into one
 PR), the action SHAs, and the Docker base-image digests.
+
+## 13. Repository housekeeping (per [D-029](DECISIONS.md#D-029))
+
+Three small decisions that make the repository read correctly from the
+outside:
+
+- **SECURITY.md**: private vulnerability reporting, with an in-scope list
+  that is a one-to-one summary of the guarantees the test suite pins -
+  attachment-name containment, the password no-leak layers, whole-or-absent
+  outputs, and the rule that a hostile input must classify as a data
+  problem, never as a retryable internal error.
+- **Package metadata**: `project.urls` and trove classifiers in pyproject,
+  led by `Private :: Do Not Upload` - the package is a container payload,
+  not a library, and the index refuses that classifier if anyone ever runs
+  a publish by mistake.
+- **No `from __future__ import annotations`**: the project pins Python
+  3.14, where deferred annotation evaluation (PEP 649) is the default. The
+  import survived from habit in every module; dropping it removes a
+  visible signal of code written for older interpreters. No TYPE_CHECKING
+  guard anywhere depended on it.

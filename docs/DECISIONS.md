@@ -40,8 +40,9 @@ This document is the authoritative register of all architectural decisions for t
 | [`D-026`](#D-026) | 🟢 | infra | One uv-locked toolchain with SHA-pinned, Dependabot-watched CI | 2026-09-04 | pre-commit runs ruff and pyright as local hooks through uv run --locked, so hooks, CI and a developer's shell all resolve the single version pinned in uv.lock (the remote-hook revs had drifted behind the lock). CI runs with a read-only token, per-ref concurrency, job timeouts and actions pinned to full commit SHAs; uv sync --locked replaces --frozen. scripts/ and docs/scripts/ join the ruff and pyright gates - the bare 'scripts' exclude had silently covered both, leaving the CI-run decision validator unlinted; the widened rule set (SIM, PTH, PIE, RET, PERF, FURB, N; ASYNC dropped, no async code exists) surfaced nine findings, fixed in place, and pyright now reports ignore comments that suppress nothing. Dependabot watches the three pinned surfaces weekly: the uv lockfile, the actions, the Docker digests. | [`DESIGN_NOTES.md section 12`](DESIGN_NOTES.md) | - |
 | [`D-027`](#D-027) | 🟢 | error-handling | Input validation extracted into its own module | 2026-09-04 | validate_inputs, the magic-bytes probe and the input-problem classification set moved byte-for-byte from merge.py into inputs.py; extract.py imports from inputs instead of reaching into merge. This removes the only import edge between the two operation modules, which the design doc presents as parallel peers, and gives the input-problem vocabulary a single home. Pure code motion: error codes, the one-failure-reports-all contract (D-012) and the context.problems log shape are unchanged. | [`DESIGN_NOTES.md section 6`](DESIGN_NOTES.md) | - |
 | [`D-028`](#D-028) | 🟢 | error-handling | Error codes typed as a StrEnum with a drift-tested documentation table | 2026-09-04 | The 32 error_code string literals scattered across src/ become a single ErrorCode StrEnum in errors.py, and PdfOpsError takes error_code: ErrorCode - a typo in a code is now a pyright error instead of a silent new vocabulary entry. StrEnum serializes identically to the raw strings, so the JSON log contract is byte-identical; the untouched test assertions that parse log output and compare raw strings pin that independently. docs/OPERATIONS.md gains the complete code table grouped by exit class, and a unit test fails when the enum and the table drift in either direction, so a new code cannot ship undocumented. The remaining small string vocabularies (password_type, password source, output action) get pyright-checked Literal aliases. | [`DESIGN_NOTES.md section 2`](DESIGN_NOTES.md) | - |
+| [`D-029`](#D-029) | 🟢 | project | Security policy and package metadata; future-import dropped on 3.14 | 2026-09-04 | SECURITY.md documents private vulnerability reporting with an in-scope list that maps one-to-one onto the test-pinned guarantees (attachment-name containment, the password no-leak layers, atomic outputs, no taxonomy escapes). pyproject gains project.urls and trove classifiers, including Private :: Do Not Upload so an accidental publish is refused by the index. from __future__ import annotations dropped across the tree: the project pins Python 3.14, where deferred annotation evaluation is the default, so the import was pure noise; there are no TYPE_CHECKING guards anywhere that depended on it. README's dev commands now include the format check CI enforces and the one-time pre-commit install. | [`DESIGN_NOTES.md section 13`](DESIGN_NOTES.md) | - |
 
-**Counts:** 28 total decisions - 23 🟢 decided, 0 🟡 pending, 0 ⏸ deferred, 2 🔵 superseded.
+**Counts:** 29 total decisions - 23 🟢 decided, 0 🟡 pending, 0 ⏸ deferred, 2 🔵 superseded.
 
 ### Index by area
 
@@ -56,9 +57,9 @@ This document is the authoritative register of all architectural decisions for t
 | reliability | 3 | D-010, D-021, D-022 |
 | observability | 1 | D-005 |
 | container | 1 | D-025 |
-| project | 1 | D-001 |
+| project | 2 | D-001, D-029 |
 | infra | 1 | D-026 |
-| **Total** | **28** | |
+| **Total** | **29** | |
 
 ### Open decisions (🟡 Pending + ⏸ Deferred)
 
@@ -397,6 +398,17 @@ Per-decision details: status, decided date, rationale, related decisions, and th
 - **Risk:** low
 - **Reversibility:** cheap
 - **Where:** [`DESIGN_NOTES.md section 2`](DESIGN_NOTES.md)
+
+<a id="D-029"></a>
+### D-029
+- **Title:** Security policy and package metadata; future-import dropped on 3.14
+- **Status:** 🟢 Decided
+- **Area:** project
+- **Decided on:** 2026-09-04
+- **Summary:** SECURITY.md documents private vulnerability reporting with an in-scope list that maps one-to-one onto the test-pinned guarantees (attachment-name containment, the password no-leak layers, atomic outputs, no taxonomy escapes). pyproject gains project.urls and trove classifiers, including Private :: Do Not Upload so an accidental publish is refused by the index. from __future__ import annotations dropped across the tree: the project pins Python 3.14, where deferred annotation evaluation is the default, so the import was pure noise; there are no TYPE_CHECKING guards anywhere that depended on it. README's dev commands now include the format check CI enforces and the one-time pre-commit install.
+- **Risk:** low
+- **Reversibility:** cheap
+- **Where:** [`DESIGN_NOTES.md section 13`](DESIGN_NOTES.md)
 
 ---
 

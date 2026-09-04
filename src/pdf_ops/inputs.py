@@ -5,8 +5,6 @@ and the problem classification live here so merge and extract cannot
 drift apart.
 """
 
-from __future__ import annotations
-
 from collections.abc import Sequence
 from pathlib import Path
 

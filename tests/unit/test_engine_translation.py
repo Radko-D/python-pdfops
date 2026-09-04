@@ -1,8 +1,6 @@
 """The structure-walk translation net: a builtin exception raised while
 walking a document's structure is a data problem, never an internal error."""
 
-from __future__ import annotations
-
 from pathlib import Path
 
 import pytest
