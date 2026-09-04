@@ -59,7 +59,7 @@ plaintext `/Encrypt` dictionary; and duplicate-name fidelity required walking
 `/Names/EmbeddedFiles` directly (cycle-guarded) because `Pdf.attachments` is a
 Mapping, exactly as predicted in section 1.
 
-## 2. Exit-code taxonomy (per [D-003](DECISIONS.md#D-003))
+## 2. Exit-code taxonomy (per [D-003](DECISIONS.md#D-003), [D-028](DECISIONS.md#D-028))
 
 The process exit code is the application's external API toward the workflow engine. Classes,
 not fine-grained codes - workflow engines branch on codes, and codes are a scarce, stable
@@ -84,6 +84,14 @@ dedicated `10+` transient band was resolved with the retry-semantics work
 0-6 - it is a published API two iterations deep, nearly every failure class here is
 deterministic, and retryability is better expressed as documentation the operator
 composes (README's per-code table + retryStrategy expression) than as more codes.
+
+**Typed vocabulary ([D-028](DECISIONS.md#D-028)):** the fine-grained `error_code`
+tokens started as string literals at each raise site. They are now a single
+`ErrorCode` StrEnum, so the complete vocabulary is readable in one place and a
+typo is a type error rather than a silent new code. StrEnum members serialize
+exactly like the raw strings, so nothing changes on the wire; the log-parsing
+tests that compare raw strings pin that independently. The full table, grouped
+by exit class, lives in OPERATIONS.md with a drift test against the enum.
 
 ## 3. Environment-variable contract (per [D-004](DECISIONS.md#D-004))
 
