@@ -427,3 +427,35 @@ Considered and not taken: distroless/static bases (the pinned slim base with
 pip removed reaches most of the value while keeping a debuggable Python
 layout); image signing/SBOM (registry- and org-specific, noted as release
 engineering rather than image structure).
+
+## 12. Toolchain and CI pinning (per [D-026](DECISIONS.md#D-026))
+
+The repo had three places that could each pick their own tool versions: the
+pre-commit hook pins, uv.lock, and whatever a developer's shell resolved.
+They had already drifted - the hooks pinned older ruff and pyright releases
+than the lockfile. The fix is structural rather than a version bump: the
+Python tools run as local pre-commit hooks through `uv run --locked`, so
+hooks, CI and a developer's shell all execute the single version pinned in
+uv.lock. Only the generic hygiene hooks (whitespace, YAML/TOML syntax,
+large files) still come from a remote hook repo.
+
+Two related gaps closed in the same pass:
+
+- **The gates now cover every script.** The bare `scripts` entry in the
+  ruff exclude list silently matched both `scripts/` and `docs/scripts/`,
+  leaving the decision-register validator - which CI executes on every
+  push - unlinted and untyped. Both directories joined the ruff and pyright
+  gates; the widened rule set (SIM, PTH, PIE, RET, PERF, FURB, N added;
+  ASYNC dropped because no async code exists) surfaced nine findings, all
+  fixed with behavior-preserving edits. pyright's
+  `reportUnnecessaryTypeIgnoreComment` keeps ignore comments honest; four
+  that suppressed nothing were removed.
+- **CI itself is pinned and least-privilege.** Actions are pinned to full
+  commit SHAs (a tag can be moved; a SHA cannot), the workflow token is
+  read-only, runs on the same ref supersede each other, and jobs carry
+  timeouts. `uv sync --locked` verifies the lockfile matches pyproject
+  instead of silently trusting it.
+
+Pinning everything creates a staleness problem, so Dependabot watches the
+three pinned surfaces weekly: the uv lockfile (dev tooling grouped into one
+PR), the action SHAs, and the Docker base-image digests.
