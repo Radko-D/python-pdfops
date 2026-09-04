@@ -172,13 +172,20 @@ copies `/Names/EmbeddedFiles` on a page-level merge, so attachments in merge inp
 silently dropped - options (detect-and-warn, fail-loud flag, qpdf's
 `--copy-attachments-from`) are evaluated when attachment handling is built out.
 
-## 6. Input validation and atomic output (per [D-010](DECISIONS.md#D-010), [D-012](DECISIONS.md#D-012))
+## 6. Input validation and atomic output (per [D-010](DECISIONS.md#D-010), [D-012](DECISIONS.md#D-012), [D-027](DECISIONS.md#D-027))
 
 **Collect-all validation ([D-012](DECISIONS.md#D-012)):** every input is checked up front
 (exists, is a file, readable, starts with `%PDF-`) and *all* problems are reported in one
 failure event - an operator fixing a broken workflow learns about every bad input from a
 single run, not one per retry. The exit class follows the first problem in input order
 (deterministic); the full list travels in `context.problems`.
+
+**One home for the check ([D-027](DECISIONS.md#D-027)):** the validation originally
+lived in `merge.py` with `extract.py` importing it from there - the only import edge
+between two modules the design doc presents as parallel peers. It moved byte-for-byte
+into `inputs.py`, so both operations depend on the shared module instead of one
+depending on the other. Pure code motion: error codes, the collect-all contract and
+the `context.problems` shape are unchanged.
 
 **Atomic output ([D-010](DECISIONS.md#D-010)):** all output is written to a temp file
 created *in the destination directory* - same filesystem, because `os.replace` is only

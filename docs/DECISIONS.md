@@ -38,8 +38,9 @@ This document is the authoritative register of all architectural decisions for t
 | [`D-024`](#D-024) | 🟢 | security | Secrets stay stdlib, consolidated into one module | 2026-09-03 | All secret handling (Secret wrapper, EnvSecret/FileSecret source refs with resolve()/describe(), Secrets bundle, scrub registration) consolidated into secrets.py; config.py only parses which source is configured. Shelf options evaluated and rejected: pydantic SecretStr (compiled dependency for one masked-repr class), pydantic-settings (config-layer rewrite; secrets_dir expects field-named files in a fixed directory - a different contract from PDFOPS_PASSWORD_FILE=<any path>; ValidationError would need retranslation into the error_code taxonomy), scanner-style log redactors (pattern heuristics, weaker than the exact-value field-restricted scrub that avoids the password-oracle problem). | [`DESIGN_NOTES.md section 8`](DESIGN_NOTES.md) | - |
 | [`D-025`](#D-025) | 🟢 | container | Hardened runtime image: digest-pinned multi-stage build, read-only rootfs | 2026-09-03 | The image is a two-stage build: a digest-pinned uv stage resolves the lockfile into a self-contained virtualenv with compiled bytecode; the runtime stage (digest-pinned python:3.14-slim) carries only that venv, uninstalls the base image's pip, removes stdlib ensurepip (its bundled wheel would restore pip in one command), and runs as fixed non-root UID 10001. Read-only root filesystem is proven by a container test running the golden merge under --read-only --cap-drop ALL --security-opt no-new-privileges (all writes land in the output mount by design). deploy/argo-example.yaml ships the full posture incl. fsGroup, secret-mounted password, a retry expression covering exit 1 plus pod-level Error nodes (which carry no exit code), and memory sized by the measured input+128MB rule. Distroless bases considered and not taken: pinned slim minus pip reaches most of the value while staying debuggable. | [`DESIGN_NOTES.md section 11`](DESIGN_NOTES.md) | - |
 | [`D-026`](#D-026) | 🟢 | infra | One uv-locked toolchain with SHA-pinned, Dependabot-watched CI | 2026-09-04 | pre-commit runs ruff and pyright as local hooks through uv run --locked, so hooks, CI and a developer's shell all resolve the single version pinned in uv.lock (the remote-hook revs had drifted behind the lock). CI runs with a read-only token, per-ref concurrency, job timeouts and actions pinned to full commit SHAs; uv sync --locked replaces --frozen. scripts/ and docs/scripts/ join the ruff and pyright gates - the bare 'scripts' exclude had silently covered both, leaving the CI-run decision validator unlinted; the widened rule set (SIM, PTH, PIE, RET, PERF, FURB, N; ASYNC dropped, no async code exists) surfaced nine findings, fixed in place, and pyright now reports ignore comments that suppress nothing. Dependabot watches the three pinned surfaces weekly: the uv lockfile, the actions, the Docker digests. | [`DESIGN_NOTES.md section 12`](DESIGN_NOTES.md) | - |
+| [`D-027`](#D-027) | 🟢 | error-handling | Input validation extracted into its own module | 2026-09-04 | validate_inputs, the magic-bytes probe and the input-problem classification set moved byte-for-byte from merge.py into inputs.py; extract.py imports from inputs instead of reaching into merge. This removes the only import edge between the two operation modules, which the design doc presents as parallel peers, and gives the input-problem vocabulary a single home. Pure code motion: error codes, the one-failure-reports-all contract (D-012) and the context.problems log shape are unchanged. | [`DESIGN_NOTES.md section 6`](DESIGN_NOTES.md) | - |
 
-**Counts:** 26 total decisions - 23 🟢 decided, 0 🟡 pending, 0 ⏸ deferred, 2 🔵 superseded.
+**Counts:** 27 total decisions - 23 🟢 decided, 0 🟡 pending, 0 ⏸ deferred, 2 🔵 superseded.
 
 ### Index by area
 
@@ -47,7 +48,7 @@ This document is the authoritative register of all architectural decisions for t
 
 | Area | Count | IDs |
 |---|---|---|
-| error-handling | 5 | D-003, D-006, D-012, D-015, D-020 |
+| error-handling | 6 | D-003, D-006, D-012, D-015, D-020, D-027 |
 | config | 4 | D-004, D-007, D-008, D-009 |
 | pdf-engine | 5 | D-002, D-011, D-016, D-018, D-023 |
 | security | 5 | D-013, D-014, D-017, D-019, D-024 |
@@ -56,7 +57,7 @@ This document is the authoritative register of all architectural decisions for t
 | container | 1 | D-025 |
 | project | 1 | D-001 |
 | infra | 1 | D-026 |
-| **Total** | **26** | |
+| **Total** | **27** | |
 
 ### Open decisions (🟡 Pending + ⏸ Deferred)
 
@@ -373,6 +374,17 @@ Per-decision details: status, decided date, rationale, related decisions, and th
 - **Risk:** low
 - **Reversibility:** cheap
 - **Where:** [`DESIGN_NOTES.md section 12`](DESIGN_NOTES.md)
+
+<a id="D-027"></a>
+### D-027
+- **Title:** Input validation extracted into its own module
+- **Status:** 🟢 Decided
+- **Area:** error-handling
+- **Decided on:** 2026-09-04
+- **Summary:** validate_inputs, the magic-bytes probe and the input-problem classification set moved byte-for-byte from merge.py into inputs.py; extract.py imports from inputs instead of reaching into merge. This removes the only import edge between the two operation modules, which the design doc presents as parallel peers, and gives the input-problem vocabulary a single home. Pure code motion: error codes, the one-failure-reports-all contract (D-012) and the context.problems log shape are unchanged.
+- **Risk:** low
+- **Reversibility:** cheap
+- **Where:** [`DESIGN_NOTES.md section 6`](DESIGN_NOTES.md)
 
 ---
 
