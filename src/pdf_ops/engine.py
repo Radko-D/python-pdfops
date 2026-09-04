@@ -47,6 +47,16 @@ class OpenedInput:
     # events; anything unrecoverable raises instead.
     warnings: tuple[str, ...] = ()
 
+    def event_fields(self) -> dict[str, str | int | bool | None]:
+        """The ``input_opened`` payload - one schema for every operation."""
+        return {
+            "input": str(self.path),
+            "pages": self.pages,
+            "encrypted": self.encrypted,
+            "algorithm": self.algorithm,
+            "password_type": self.password_type,
+        }
+
 
 @dataclass(frozen=True, slots=True)
 class Attachment:
